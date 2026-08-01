@@ -25,6 +25,23 @@ npm run build
 資料表定義位於 `db/schema.ts`，修改後使用 `npm run db:generate`
 建立新的 Drizzle migration。
 
+## 目錄結構
+
+主程式位於專案根目錄，直接部署為 `yazy-friends` Worker。
+
+`legacy/yazy-club/` 是已停用的舊版 Worker，僅作保存與查閱之用，
+不會被建置、部署、lint 或 CI 檢查。請勿在其中新增功能。
+
+## 限流
+
+`POST /api/rooms` 透過 Cloudflare Workers Rate Limiting binding
+限制每個 IP 每分鐘最多建立 10 間房，超過回傳 `429`。
+規則定義在 `wrangler.jsonc` 的 `ratelimits`，實際檢查在
+`lib/server.ts` 的 `withinRoomCreateLimit()`。
+
+本機開發若沒有這個 binding，檢查會直接放行（限流屬於防濫用機制，
+不影響遊戲正確性）。加入房間與遊戲操作皆不受限流影響。
+
 ## 部署與資料保存
 
 ```bash
