@@ -2,13 +2,15 @@ import { env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./schema";
 
+const runtimeEnv = env as { DB?: D1Database; APP_ENV?: string };
+
 export function getD1() {
-  if (!env.DB) {
+  if (!runtimeEnv.DB) {
     throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
+      "Cloudflare D1 binding `DB` is unavailable. Configure the DB binding in wrangler.jsonc before using the database."
     );
   }
-  return env.DB;
+  return runtimeEnv.DB;
 }
 
 export function getDb() {
@@ -18,10 +20,33 @@ export function getDb() {
 let schemaReady: Promise<void> | null = null;
 
 export function ensureSchema() {
+  if (runtimeEnv.APP_ENV === "production") {
+    return Promise.resolve();
+  }
   if (!schemaReady) {
     const d1 = getD1();
     schemaReady = d1
       .batch([
+        d1.prepare(`
+          CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY NOT NULL,
+            username TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            password_salt TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+        `),
+        d1.prepare(`
+          CREATE TABLE IF NOT EXISTS account_sessions (
+            id TEXT PRIMARY KEY NOT NULL,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+          )
+        `),
         d1.prepare(`
           CREATE TABLE IF NOT EXISTS rooms (
             id TEXT PRIMARY KEY NOT NULL,
@@ -32,7 +57,9 @@ export function ensureSchema() {
             current_seat INTEGER NOT NULL DEFAULT 0,
             round INTEGER NOT NULL DEFAULT 1,
             dice_json TEXT NOT NULL DEFAULT '[]',
+            held_json TEXT NOT NULL DEFAULT '[false,false,false,false,false]',
             rolls_used INTEGER NOT NULL DEFAULT 0,
+            turn_deadline TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             finished_at TEXT
@@ -42,6 +69,7 @@ export function ensureSchema() {
           CREATE TABLE IF NOT EXISTS players (
             id TEXT PRIMARY KEY NOT NULL,
             room_id TEXT NOT NULL REFERENCES rooms(id),
+            user_id TEXT REFERENCES users(id),
             name TEXT NOT NULL,
             seat INTEGER NOT NULL,
             token_hash TEXT NOT NULL,
@@ -61,6 +89,8 @@ export function ensureSchema() {
         d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS rooms_code_unique ON rooms(code)"),
         d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS players_room_seat_unique ON players(room_id, seat)"),
         d1.prepare("CREATE INDEX IF NOT EXISTS players_room_idx ON players(room_id)"),
+        d1.prepare("CREATE INDEX IF NOT EXISTS players_user_idx ON players(user_id)"),
+        d1.prepare("CREATE INDEX IF NOT EXISTS account_sessions_user_idx ON account_sessions(user_id)"),
         d1.prepare("CREATE INDEX IF NOT EXISTS scores_room_idx ON scores(room_id)"),
       ])
       .then(() => undefined)

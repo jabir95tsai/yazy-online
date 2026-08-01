@@ -1,0 +1,1 @@
+ALTER TABLE `rooms` ADD `held_json` text DEFAULT '[false,false,false,false,false]' NOT NULL;

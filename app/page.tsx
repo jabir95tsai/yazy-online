@@ -1,20 +1,25 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   categories,
-  categoryIds,
   scoreDice,
   scoreSummary,
   type CategoryId,
 } from "@/lib/game";
-
-type Session = {
-  code: string;
-  playerId: string;
-  token: string;
-  name: string;
-};
+import {
+  findResumableSession,
+  selectBrowserSession,
+  upsertBrowserSession,
+  type BrowserSession as Session,
+} from "@/lib/browser-session";
 
 type RoomState = {
   room: {
@@ -26,8 +31,11 @@ type RoomState = {
     currentSeat: number;
     round: number;
     dice: number[];
+    held: boolean[];
     rollsUsed: number;
+    turnDeadline: string | null;
     createdAt: string;
+    updatedAt: string;
     finishedAt: string | null;
   };
   players: Array<{ id: string; name: string; seat: number }>;
@@ -40,12 +48,63 @@ type HistoryGame = {
   players: Array<{
     id: string;
     name: string;
+    isMe?: boolean;
     scores: Array<{ category: string; score: number }>;
   }>;
 };
 
+type AccountUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  createdAt: string;
+};
+
+type AccountProfile = {
+  user: AccountUser;
+  stats: { games: number; wins: number; bestScore: number; averageScore: number };
+  games: HistoryGame[];
+};
+
 const SESSION_KEY = "yazy-club-sessions";
-const diceFaces = ["", "⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
+const ACTIVE_SESSION_PREFIX = "yazy-club-active-player";
+const EMPTY_SCORE_SUMMARY = { upper: 0, bonus: 0, lower: 0, total: 0 };
+const pipPositions: Record<number, number[]> = {
+  1: [5],
+  2: [1, 9],
+  3: [1, 5, 9],
+  4: [1, 3, 7, 9],
+  5: [1, 3, 5, 7, 9],
+  6: [1, 3, 4, 6, 7, 9],
+};
+const dieRotations: Record<number, { x: string; y: string }> = {
+  1: { x: "0deg", y: "0deg" },
+  2: { x: "-90deg", y: "0deg" },
+  3: { x: "0deg", y: "-90deg" },
+  4: { x: "0deg", y: "90deg" },
+  5: { x: "90deg", y: "0deg" },
+  6: { x: "0deg", y: "180deg" },
+};
+
+function DiceCube({ value }: { value: number }) {
+  const rotation = dieRotations[value] ?? dieRotations[1];
+  const style = {
+    "--die-x": rotation.x,
+    "--die-y": rotation.y,
+  } as CSSProperties;
+
+  return (
+    <span aria-hidden="true" className="die-cube" style={style}>
+      {[1, 2, 3, 4, 5, 6].map((face) => (
+        <span className={`die-face face-${face}`} key={face}>
+          {pipPositions[face].map((position) => (
+            <i className={`pip pip-${position}`} key={position} />
+          ))}
+        </span>
+      ))}
+    </span>
+  );
+}
 
 function readSessions(): Session[] {
   try {
@@ -56,12 +115,11 @@ function readSessions(): Session[] {
 }
 
 function saveSession(session: Session) {
-  const sessions = readSessions().filter((item) => item.code !== session.code);
-  localStorage.setItem(SESSION_KEY, JSON.stringify([...sessions, session].slice(-20)));
-}
-
-function playerTotal(state: RoomState, playerId: string) {
-  return scoreSummary(state.scores.filter((score) => score.playerId === playerId));
+  localStorage.setItem(
+    SESSION_KEY,
+    JSON.stringify(upsertBrowserSession(readSessions(), session)),
+  );
+  sessionStorage.setItem(`${ACTIVE_SESSION_PREFIX}:${session.code}`, session.playerId);
 }
 
 export default function Home() {
@@ -72,15 +130,95 @@ export default function Home() {
   const [session, setSession] = useState<Session | null>(null);
   const [state, setState] = useState<RoomState | null>(null);
   const [held, setHeld] = useState([false, false, false, false, false]);
+  const [rolling, setRolling] = useState(false);
+  const [scorePlayerId, setScorePlayerId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [history, setHistory] = useState<HistoryGame[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [account, setAccount] = useState<AccountUser | null>(null);
+  const [profile, setProfile] = useState<AccountProfile | null>(null);
+  const [accountPanelOpen, setAccountPanelOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [authUsername, setAuthUsername] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authDisplayName, setAuthDisplayName] = useState("");
+  const [profileName, setProfileName] = useState("");
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountError, setAccountError] = useState("");
+  const [initialized, setInitialized] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [resumable, setResumable] = useState<Session | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
+  const stateRef = useRef<RoomState | null>(null);
+  const heldRef = useRef(held);
+  const roomEtagRef = useRef<string | null>(null);
+  const rollAnimationTimer = useRef<number | null>(null);
+  const holdSyncTimer = useRef<number | null>(null);
+  const holdRequestRef = useRef<Promise<void> | null>(null);
+  const actionBusyRef = useRef(false);
+
+  const startRollAnimation = useCallback(() => {
+    setRolling(true);
+    if (rollAnimationTimer.current !== null) {
+      window.clearTimeout(rollAnimationTimer.current);
+    }
+    rollAnimationTimer.current = window.setTimeout(() => {
+      setRolling(false);
+      rollAnimationTimer.current = null;
+    }, 720);
+  }, []);
+
+  const refreshProfile = useCallback(async () => {
+    const response = await fetch("/api/profile", { cache: "no-store" });
+    if (!response.ok) {
+      setAccount(null);
+      setProfile(null);
+      return false;
+    }
+    const next = (await response.json()) as AccountProfile;
+    setAccount(next.user);
+    setProfile(next);
+    setName(next.user.displayName);
+    setProfileName(next.user.displayName);
+    setHistory(next.games ?? []);
+    return true;
+  }, []);
+
+  // Always re-reads localStorage rather than closing over a snapshot, so a
+  // game finished during this visit is included.
+  const refreshHistory = useCallback(async () => {
+    try {
+      if (await refreshProfile()) return;
+      const response = await fetch("/api/history", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessions: readSessions().map(({ playerId, token }) => ({
+            playerId,
+            token,
+          })),
+        }),
+      });
+      const data = (await response.json()) as { games?: HistoryGame[] };
+      setHistory(data.games ?? []);
+    } finally {
+      setHistoryLoaded(true);
+    }
+  }, [refreshProfile]);
 
   const fetchRoom = useCallback(async (code: string, quiet = false) => {
     try {
-      const response = await fetch(`/api/rooms/${code}`, { cache: "no-store" });
+      const headers: HeadersInit = {};
+      if (roomEtagRef.current) {
+        headers["if-none-match"] = roomEtagRef.current;
+      }
+      const response = await fetch(`/api/rooms/${code}`, {
+        cache: "no-store",
+        headers,
+      });
+      if (response.status === 304) return;
       if (!response.ok) {
         if (!quiet) {
           const data = (await response.json()) as { error?: string };
@@ -89,53 +227,111 @@ export default function Home() {
         return;
       }
       const next = (await response.json()) as RoomState;
-      setState((previous) => {
-        if (
-          !previous ||
-          previous.room.rollsUsed !== next.room.rollsUsed ||
-          previous.room.currentSeat !== next.room.currentSeat
-        ) {
-          setHeld([false, false, false, false, false]);
-        }
-        return next;
-      });
+      const previous = stateRef.current;
+      if (
+        previous?.room.code === next.room.code &&
+        next.room.updatedAt < previous.room.updatedAt
+      ) {
+        return;
+      }
+      roomEtagRef.current = response.headers.get("etag");
+      const turnChanged =
+        previous?.room.currentSeat !== next.room.currentSeat ||
+        previous?.room.round !== next.room.round;
+      const newRoll =
+        Boolean(previous) &&
+        !turnChanged &&
+        next.room.rollsUsed > (previous?.room.rollsUsed ?? 0);
+      if (!previous || turnChanged || previous.room.rollsUsed !== next.room.rollsUsed) {
+        heldRef.current = next.room.held;
+        setHeld(next.room.held);
+      }
+      if (newRoll) startRollAnimation();
+      if (previous?.room.turnDeadline !== next.room.turnDeadline) {
+        setClock(Date.now());
+      }
+      stateRef.current = next;
+      setState(next);
     } catch {
       if (!quiet) setError("連線中斷，正在嘗試重新連線。");
     }
-  }, []);
+  }, [startRollAnimation]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const code = (params.get("room") ?? "").toUpperCase().slice(0, 6);
     const sessions = readSessions();
     if (code) {
-      setJoinCode(code);
-      setMode("join");
-      const existing = sessions.find((item) => item.code === code);
-      if (existing) {
-        setSession(existing);
-        setName(existing.name);
-        void fetchRoom(code);
-      }
+      const existing = selectBrowserSession(
+        sessions,
+        code,
+        sessionStorage.getItem(`${ACTIVE_SESSION_PREFIX}:${code}`),
+      );
+      queueMicrotask(() => {
+        setJoinCode(code);
+        setMode("join");
+        if (existing) {
+          setSession(existing);
+          setName(existing.name);
+          setConnecting(true);
+          void fetchRoom(code).finally(() => setConnecting(false));
+        } else {
+          // This tab has no identity in the room yet. Another tab in this
+          // browser may have one, but resuming it here would hijack that
+          // tab's player, so only offer it as an explicit choice.
+          setResumable(findResumableSession(sessions, code));
+        }
+        setInitialized(true);
+      });
+    } else {
+      queueMicrotask(() => setInitialized(true));
     }
 
-    void fetch("/api/history", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        sessions: sessions.map(({ playerId, token }) => ({ playerId, token })),
-      }),
-    })
-      .then((response) => response.json())
-      .then((data: { games?: HistoryGame[] }) => setHistory(data.games ?? []))
-      .finally(() => setHistoryLoaded(true));
-  }, [fetchRoom]);
+    queueMicrotask(() => {
+      void refreshHistory();
+    });
+  }, [fetchRoom, refreshHistory]);
 
   useEffect(() => {
     if (!session) return;
-    const timer = window.setInterval(() => void fetchRoom(session.code, true), 1500);
+    const status = state?.room.status;
+    if (status === "finished") return;
+    let timer: number | null = null;
+    const schedule = () => {
+      if (timer !== null) window.clearInterval(timer);
+      const interval =
+        document.visibilityState === "hidden" ? 15_000 : status === "waiting" ? 4_000 : 1_500;
+      timer = window.setInterval(() => void fetchRoom(session.code, true), interval);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void fetchRoom(session.code, true);
+      schedule();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      if (timer !== null) window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [fetchRoom, session, state?.room.status]);
+
+  useEffect(() => {
+    if (state?.room.status !== "playing" || !state.room.turnDeadline) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [fetchRoom, session]);
+  }, [state?.room.status, state?.room.turnDeadline]);
+
+  useEffect(
+    () => () => {
+      if (rollAnimationTimer.current !== null) {
+        window.clearTimeout(rollAnimationTimer.current);
+      }
+      if (holdSyncTimer.current !== null) {
+        window.clearTimeout(holdSyncTimer.current);
+      }
+    },
+    [],
+  );
 
   const currentPlayer = state?.players.find(
     (player) => player.seat === state.room.currentSeat,
@@ -143,19 +339,45 @@ export default function Home() {
   const me = state?.players.find((player) => player.id === session?.playerId);
   const isMyTurn =
     state?.room.status === "playing" && currentPlayer?.id === session?.playerId;
-  const myScores = useMemo(
-    () => state?.scores.filter((score) => score.playerId === session?.playerId) ?? [],
-    [session?.playerId, state?.scores],
+  const turnSeconds = state?.room.turnDeadline
+    ? Math.max(0, Math.ceil((Date.parse(state.room.turnDeadline) - clock) / 1_000))
+    : null;
+  const visibleHeld = isMyTurn
+    ? held
+    : state?.room.held ?? [false, false, false, false, false];
+  const viewedPlayerId =
+    state?.players.some((player) => player.id === scorePlayerId)
+      ? scorePlayerId
+      : session?.playerId;
+  const viewedPlayer = state?.players.find(
+    (player) => player.id === viewedPlayerId,
   );
+  const viewingMyScore = viewedPlayerId === session?.playerId;
+  const viewedScores = useMemo(
+    () => state?.scores.filter((score) => score.playerId === viewedPlayerId) ?? [],
+    [state?.scores, viewedPlayerId],
+  );
+  const viewedSummary = useMemo(() => scoreSummary(viewedScores), [viewedScores]);
+  const scoreSummaries = useMemo(() => {
+    const summaries = new Map<string, ReturnType<typeof scoreSummary>>();
+    for (const player of state?.players ?? []) {
+      summaries.set(
+        player.id,
+        scoreSummary(state?.scores.filter((score) => score.playerId === player.id) ?? []),
+      );
+    }
+    return summaries;
+  }, [state?.players, state?.scores]);
   const rankings = useMemo(
     () =>
       state
         ? [...state.players].sort(
             (a, b) =>
-              playerTotal(state, b.id).total - playerTotal(state, a.id).total,
+              (scoreSummaries.get(b.id)?.total ?? 0) -
+              (scoreSummaries.get(a.id)?.total ?? 0),
           )
         : [],
-    [state],
+    [scoreSummaries, state],
   );
 
   async function enterRoom(kind: "create" | "join") {
@@ -196,6 +418,9 @@ export default function Home() {
       };
       saveSession(nextSession);
       setSession(nextSession);
+      setResumable(null);
+      setScorePlayerId(nextSession.playerId);
+      roomEtagRef.current = null;
       window.history.replaceState({}, "", `?room=${data.code}`);
       await fetchRoom(data.code);
     } catch {
@@ -205,47 +430,253 @@ export default function Home() {
     }
   }
 
-  async function action(
-    actionName: "start" | "roll" | "score",
-    category?: CategoryId,
-  ) {
-    if (!session || !state) return;
-    setBusy(true);
-    setError("");
+  async function submitAccount() {
+    setAccountBusy(true);
+    setAccountError("");
     try {
-      const response = await fetch(`/api/rooms/${session.code}/action`, {
+      const response = await fetch(`/api/auth/${authMode}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          action: actionName,
-          playerId: session.playerId,
-          token: session.token,
-          held,
-          category,
+          username: authUsername,
+          password: authPassword,
+          displayName: authDisplayName,
         }),
+      });
+      const data = (await response.json()) as { user?: AccountUser; error?: string };
+      if (!response.ok || !data.user) {
+        setAccountError(data.error ?? "無法登入，請再試一次。");
+        return;
+      }
+      setAccount(data.user);
+      setName(data.user.displayName);
+      setProfileName(data.user.displayName);
+      setAuthPassword("");
+      await refreshProfile();
+    } catch {
+      setAccountError("連線失敗，請再試一次。");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function saveProfile() {
+    setAccountBusy(true);
+    setAccountError("");
+    try {
+      const response = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ displayName: profileName }),
       });
       const data = (await response.json()) as { error?: string };
       if (!response.ok) {
+        setAccountError(data.error ?? "無法更新個人資料。");
+        return;
+      }
+      await refreshProfile();
+    } catch {
+      setAccountError("連線失敗，請再試一次。");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function logoutAccount() {
+    setAccountBusy(true);
+    setAccountError("");
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      setAccount(null);
+      setProfile(null);
+      setAccountPanelOpen(false);
+      setHistory([]);
+      setHistoryLoaded(true);
+      setName("");
+    } finally {
+      setAccountBusy(false);
+    }
+  }
+
+  async function action(
+    actionName: "start" | "roll" | "score" | "skip",
+    category?: CategoryId,
+  ) {
+    if (!session || !stateRef.current || actionBusyRef.current) return;
+    actionBusyRef.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      if (
+        (actionName === "roll" || actionName === "score") &&
+        holdSyncTimer.current !== null
+      ) {
+        window.clearTimeout(holdSyncTimer.current);
+        holdSyncTimer.current = null;
+      }
+      if (holdRequestRef.current) {
+        await holdRequestRef.current;
+      }
+      if (actionName === "roll") startRollAnimation();
+
+      let response: Response | null = null;
+      let data: { error?: string } = {};
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const latestState = stateRef.current;
+        if (!latestState || latestState.room.code !== session.code) return;
+        response = await fetch(`/api/rooms/${session.code}/action`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            action: actionName,
+            playerId: session.playerId,
+            token: session.token,
+            held: heldRef.current,
+            category,
+            expectedUpdatedAt: latestState.room.updatedAt,
+          }),
+        });
+        data = (await response.json()) as { error?: string };
+        const recoverableConflict =
+          response.status === 409 && data.error?.includes("狀態已變更");
+        if (!recoverableConflict || attempt === 1) break;
+        await fetchRoom(session.code, true);
+      }
+
+      if (!response?.ok) {
         setError(data.error ?? "操作失敗，請再試一次。");
         return;
       }
-      if (actionName === "roll" || actionName === "score") {
-        if (actionName === "score") setHeld([false, false, false, false, false]);
+      if (actionName === "score" || actionName === "skip") {
+        const empty = [false, false, false, false, false];
+        heldRef.current = empty;
+        setHeld(empty);
       }
       await fetchRoom(session.code);
     } catch {
       setError("連線失敗，請再試一次。");
     } finally {
+      actionBusyRef.current = false;
       setBusy(false);
     }
   }
 
+  function toggleHeld(index: number) {
+    const currentState = stateRef.current;
+    if (
+      !session ||
+      !currentState ||
+      !isMyTurn ||
+      currentState.room.rollsUsed < 1 ||
+      actionBusyRef.current
+    ) {
+      return;
+    }
+    const nextHeld = heldRef.current.map((value, dieIndex) =>
+      dieIndex === index ? !value : value,
+    );
+    heldRef.current = nextHeld;
+    setHeld(nextHeld);
+    if (holdSyncTimer.current !== null) {
+      window.clearTimeout(holdSyncTimer.current);
+      holdSyncTimer.current = null;
+    }
+    holdSyncTimer.current = window.setTimeout(() => {
+      holdSyncTimer.current = null;
+      const previousRequest = holdRequestRef.current;
+      const request = (async () => {
+        if (previousRequest) await previousRequest;
+        const latestState = stateRef.current;
+        if (
+          !latestState ||
+          latestState.room.code !== session.code ||
+          latestState.players.find((player) => player.id === session.playerId)?.seat !==
+            latestState.room.currentSeat
+        ) {
+          return;
+        }
+        try {
+          const response = await fetch(`/api/rooms/${session.code}/action`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              action: "hold",
+              playerId: session.playerId,
+              token: session.token,
+              held: nextHeld,
+              expectedUpdatedAt: latestState.room.updatedAt,
+            }),
+          });
+          const data = (await response.json()) as {
+            error?: string;
+            updatedAt?: string;
+          };
+          if (!response.ok) {
+            await fetchRoom(session.code, true);
+            if (response.status !== 409) {
+              setError(data.error ?? "無法同步鎖骰狀態。");
+            }
+            return;
+          }
+          const current = stateRef.current;
+          if (current?.room.code === session.code && data.updatedAt) {
+            const nextState = {
+              ...current,
+              room: {
+                ...current.room,
+                held: nextHeld,
+                updatedAt: data.updatedAt,
+              },
+            };
+            stateRef.current = nextState;
+            setState(nextState);
+          }
+        } catch {
+          await fetchRoom(session.code, true);
+          setError("無法同步鎖骰狀態，請再試一次。");
+        }
+      })();
+      holdRequestRef.current = request;
+      void request.finally(() => {
+        if (holdRequestRef.current === request) holdRequestRef.current = null;
+      });
+    }, 120);
+  }
+
+  function resumeAs(previous: Session) {
+    saveSession(previous);
+    setSession(previous);
+    setResumable(null);
+    setName(previous.name);
+    setScorePlayerId(previous.playerId);
+    roomEtagRef.current = null;
+    setConnecting(true);
+    void fetchRoom(previous.code).finally(() => setConnecting(false));
+  }
+
   function leaveRoom() {
+    if (session) {
+      sessionStorage.removeItem(`${ACTIVE_SESSION_PREFIX}:${session.code}`);
+    }
     setSession(null);
     setState(null);
-    setHeld([false, false, false, false, false]);
+    setResumable(null);
+    stateRef.current = null;
+    roomEtagRef.current = null;
+    const empty = [false, false, false, false, false];
+    heldRef.current = empty;
+    setHeld(empty);
+    setRolling(false);
+    setScorePlayerId(null);
+    if (holdSyncTimer.current !== null) {
+      window.clearTimeout(holdSyncTimer.current);
+      holdSyncTimer.current = null;
+    }
     setError("");
     window.history.replaceState({}, "", window.location.pathname);
+    // The game just played is only in the history once it is finished, so the
+    // landing page needs a fresh read rather than the snapshot from mount.
+    void refreshHistory();
   }
 
   async function copyInvite() {
@@ -256,6 +687,157 @@ export default function Home() {
     window.setTimeout(() => setCopied(false), 1800);
   }
 
+  const accountLayer = accountPanelOpen ? (
+    <div className="account-backdrop" role="presentation" onMouseDown={() => setAccountPanelOpen(false)}>
+      <section
+        aria-label={account ? "個人資料" : "使用者登入"}
+        aria-modal="true"
+        className="account-panel"
+        onMouseDown={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <button
+          aria-label="關閉"
+          className="account-close"
+          onClick={() => setAccountPanelOpen(false)}
+          type="button"
+        >
+          ×
+        </button>
+        {account && profile ? (
+          <>
+            <div className="profile-heading">
+              <span className="profile-avatar">{account.displayName.slice(0, 1).toUpperCase()}</span>
+              <div>
+                <p className="eyebrow">PLAYER PROFILE</p>
+                <h2>{account.displayName}</h2>
+                <small>@{account.username}</small>
+              </div>
+            </div>
+            <div className="profile-stats">
+              <article><strong>{profile.stats.games}</strong><span>完成場次</span></article>
+              <article><strong>{profile.stats.wins}</strong><span>勝場</span></article>
+              <article><strong>{profile.stats.bestScore}</strong><span>最高分</span></article>
+              <article><strong>{profile.stats.averageScore}</strong><span>平均分</span></article>
+            </div>
+            <label className="profile-field">
+              <span>牌桌顯示名稱</span>
+              <input
+                maxLength={18}
+                onChange={(event) => setProfileName(event.target.value)}
+                value={profileName}
+              />
+            </label>
+            {accountError && <p className="form-error">{accountError}</p>}
+            <div className="profile-actions">
+              <button
+                className="primary-action"
+                disabled={accountBusy || profileName.trim() === account.displayName}
+                onClick={saveProfile}
+                type="button"
+              >
+                儲存個人資料
+              </button>
+              <button
+                className="text-action"
+                disabled={accountBusy}
+                onClick={logoutAccount}
+                type="button"
+              >
+                登出
+              </button>
+            </div>
+            <p className="profile-since">
+              加入日期：{new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium" }).format(new Date(account.createdAt))}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="eyebrow">SAVE YOUR LEGEND</p>
+            <h2>{authMode === "login" ? "歡迎回到牌桌" : "建立玩家帳號"}</h2>
+            <p className="account-intro">登入後，每一場完成的牌局都會自動保存，換裝置也能查看。</p>
+            <div className="auth-tabs">
+              <button
+                className={authMode === "login" ? "active" : ""}
+                onClick={() => { setAuthMode("login"); setAccountError(""); }}
+                type="button"
+              >登入</button>
+              <button
+                className={authMode === "register" ? "active" : ""}
+                onClick={() => { setAuthMode("register"); setAccountError(""); }}
+                type="button"
+              >註冊</button>
+            </div>
+            <div className="auth-form">
+              {authMode === "register" && (
+                <label>
+                  <span>顯示名稱</span>
+                  <input
+                    autoComplete="nickname"
+                    maxLength={18}
+                    onChange={(event) => setAuthDisplayName(event.target.value)}
+                    placeholder="例如：骰神阿明"
+                    value={authDisplayName}
+                  />
+                </label>
+              )}
+              <label>
+                <span>帳號</span>
+                <input
+                  autoCapitalize="none"
+                  autoComplete="username"
+                  maxLength={20}
+                  onChange={(event) => setAuthUsername(event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""))}
+                  placeholder="3–20 位英文、數字或底線"
+                  value={authUsername}
+                />
+              </label>
+              <label>
+                <span>密碼</span>
+                <input
+                  autoComplete={authMode === "login" ? "current-password" : "new-password"}
+                  maxLength={72}
+                  minLength={8}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                  placeholder="至少 8 個字元"
+                  type="password"
+                  value={authPassword}
+                />
+              </label>
+              {accountError && <p className="form-error">{accountError}</p>}
+              <button
+                className="primary-action"
+                disabled={accountBusy}
+                onClick={submitAccount}
+                type="button"
+              >
+                {accountBusy ? "請稍候…" : authMode === "login" ? "登入" : "建立帳號"}
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  ) : null;
+
+  if (!initialized || (session && connecting && !state)) {
+    return (
+      <main className="game-shell connecting">
+        <header className="topbar">
+          <div className="brand">
+            <span className="brand-mark">Y</span>
+            <span>YAZY CLUB</span>
+          </div>
+        </header>
+        <section className="connecting-card" aria-live="polite">
+          <span className="live-dot" />
+          <p>{session ? `正在回到房間 ${session.code}…` : "正在準備牌桌…"}</p>
+        </section>
+        {accountLayer}
+      </main>
+    );
+  }
+
   if (session && state) {
     return (
       <main className="game-shell">
@@ -264,16 +846,22 @@ export default function Home() {
             <span className="brand-mark">Y</span>
             <span>YAZY CLUB</span>
           </button>
-          <div className="room-pill">
-            <span>房間</span>
-            <strong>{state.room.code}</strong>
-            <button onClick={copyInvite}>{copied ? "已複製！" : "邀請朋友"}</button>
+          <div className="topbar-actions">
+            <button className="account-trigger compact" onClick={() => setAccountPanelOpen(true)} type="button">
+              <span>{account?.displayName.slice(0, 1).toUpperCase() ?? "人"}</span>
+              {account ? account.displayName : "登入"}
+            </button>
+            <div className="room-pill">
+              <span>房間</span>
+              <strong>{state.room.code}</strong>
+              <button onClick={copyInvite}>{copied ? "已複製！" : "邀請朋友"}</button>
+            </div>
           </div>
         </header>
 
         <section className="players-strip" aria-label="玩家">
           {state.players.map((player) => {
-            const summary = playerTotal(state, player.id);
+            const summary = scoreSummaries.get(player.id) ?? EMPTY_SCORE_SUMMARY;
             const active =
               state.room.status === "playing" &&
               player.seat === state.room.currentSeat;
@@ -358,29 +946,47 @@ export default function Home() {
                 <span className="roll-count">已擲 {state.room.rollsUsed} / 3</span>
               </div>
 
-              <div className="dice-tray" aria-label="骰子區">
+              {turnSeconds !== null && (
+                <div className={`turn-timeout ${turnSeconds === 0 ? "expired" : ""}`}>
+                  <span>
+                    {turnSeconds > 0
+                      ? `${isMyTurn ? "你的回合" : `${currentPlayer?.name ?? "玩家"} 的回合`}剩餘 ${turnSeconds} 秒`
+                      : `${currentPlayer?.name ?? "玩家"} 的回合已逾時`}
+                  </span>
+                  {!isMyTurn && turnSeconds === 0 && (
+                    <button disabled={busy} onClick={() => action("skip")} type="button">
+                      跳過這個回合
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div
+                className="dice-tray"
+                aria-busy={rolling}
+                aria-label="骰子區"
+                aria-live="polite"
+              >
                 {Array.from({ length: 5 }).map((_, index) => {
                   const die = state.room.dice[index];
                   return (
                     <button
                       aria-label={
                         die
-                          ? `骰子 ${die}，${held[index] ? "已保留" : "未保留"}`
+                          ? `骰子 ${die}，${visibleHeld[index] ? "已保留" : "未保留"}`
                           : "尚未擲骰"
                       }
-                      className={`die ${held[index] ? "held" : ""} ${!die ? "blank" : ""}`}
+                      className={`die ${visibleHeld[index] ? "held" : ""} ${!die ? "blank" : ""} ${rolling && !visibleHeld[index] ? "rolling" : ""}`}
                       disabled={!isMyTurn || state.room.rollsUsed === 0 || busy}
                       key={index}
-                      onClick={() =>
-                        setHeld((current) =>
-                          current.map((value, dieIndex) =>
-                            dieIndex === index ? !value : value,
-                          ),
-                        )
-                      }
+                      onClick={() => toggleHeld(index)}
                     >
-                      <span>{die ? diceFaces[die] : "·"}</span>
-                      {held[index] && <small>HOLD</small>}
+                      {die ? (
+                        <DiceCube value={die} />
+                      ) : (
+                        <span className="die-placeholder">·</span>
+                      )}
+                      {visibleHeld[index] && <small>HOLD</small>}
                     </button>
                   );
                 })}
@@ -393,10 +999,16 @@ export default function Home() {
                   onClick={() => action("roll")}
                 >
                   <span aria-hidden="true">↻</span>
-                  {state.room.rollsUsed === 0 ? "擲骰" : "再擲一次"}
+                  {rolling
+                    ? "骰子滾動中…"
+                    : state.room.rollsUsed === 0
+                      ? "擲骰"
+                      : "再擲一次"}
                 </button>
                 <p>
-                  {isMyTurn
+                  {rolling
+                    ? "骰子正在桌面上翻滾，結果馬上揭曉"
+                    : isMyTurn
                     ? state.room.rollsUsed === 0
                       ? "按下擲骰，開始你的回合"
                       : "點選骰子可保留，再擲其餘骰子"
@@ -409,23 +1021,57 @@ export default function Home() {
               <div className="score-panel-heading">
                 <div>
                   <p className="eyebrow">SCORE CARD</p>
-                  <h2>選擇計分格</h2>
+                  <h2>
+                    {viewingMyScore
+                      ? isMyTurn
+                        ? "選擇計分格"
+                        : "我的計分卡"
+                      : `${viewedPlayer?.name ?? "玩家"}的計分卡`}
+                  </h2>
                 </div>
-                <strong>{scoreSummary(myScores).total}</strong>
+                <strong>{viewedSummary.total}</strong>
+              </div>
+              <div
+                aria-label="查看玩家計分卡"
+                className="score-player-tabs"
+                role="tablist"
+              >
+                {state.players.map((player) => (
+                  <button
+                    aria-selected={player.id === viewedPlayerId}
+                    className={player.id === viewedPlayerId ? "active" : ""}
+                    key={player.id}
+                    onClick={() => setScorePlayerId(player.id)}
+                    role="tab"
+                    type="button"
+                  >
+                    <span>
+                      {player.name}
+                      {player.id === session.playerId ? "（你）" : ""}
+                    </span>
+                    <b>{scoreSummaries.get(player.id)?.total ?? 0}</b>
+                  </button>
+                ))}
               </div>
               <div className="score-list">
                 {categories.map((category) => {
-                  const saved = myScores.find(
+                  const saved = viewedScores.find(
                     (score) => score.category === category.id,
                   );
                   const preview =
-                    state.room.rollsUsed > 0
+                    viewingMyScore && isMyTurn && state.room.rollsUsed > 0
                       ? scoreDice(category.id, state.room.dice)
                       : null;
                   return (
                     <button
-                      className={`score-row ${saved ? "scored" : ""}`}
-                      disabled={!isMyTurn || busy || state.room.rollsUsed < 1 || Boolean(saved)}
+                      className={`score-row ${saved ? "scored" : ""} ${viewingMyScore ? "" : "readonly"}`}
+                      disabled={
+                        !viewingMyScore ||
+                        !isMyTurn ||
+                        busy ||
+                        state.room.rollsUsed < 1 ||
+                        Boolean(saved)
+                      }
                       key={category.id}
                       onClick={() => action("score", category.id)}
                     >
@@ -444,8 +1090,8 @@ export default function Home() {
                   <small>累積 63 分可得 +35</small>
                 </span>
                 <strong>
-                  {scoreSummary(myScores).upper} / 63
-                  {scoreSummary(myScores).bonus ? " ＋35" : ""}
+                  {viewedSummary.upper} / 63
+                  {viewedSummary.bonus ? " ＋35" : ""}
                 </strong>
               </div>
             </aside>
@@ -462,8 +1108,8 @@ export default function Home() {
                   <span className="rank">{index === 0 ? "♛" : `#${index + 1}`}</span>
                   <span className="avatar">{player.name.slice(0, 1).toUpperCase()}</span>
                   <strong>{player.name}</strong>
-                  <b>{playerTotal(state, player.id).total} 分</b>
-                  {playerTotal(state, player.id).bonus > 0 && <small>含上半部加成</small>}
+                  <b>{scoreSummaries.get(player.id)?.total ?? 0} 分</b>
+                  {(scoreSummaries.get(player.id)?.bonus ?? 0) > 0 && <small>含上半部加成</small>}
                 </article>
               ))}
             </div>
@@ -472,6 +1118,7 @@ export default function Home() {
             </button>
           </section>
         )}
+        {accountLayer}
       </main>
     );
   }
@@ -483,9 +1130,15 @@ export default function Home() {
           <span className="brand-mark">Y</span>
           <span>YAZY CLUB</span>
         </div>
-        <div className="online-badge">
-          <span className="live-dot" />
-          免下載・立即開玩
+        <div className="nav-actions">
+          <div className="online-badge">
+            <span className="live-dot" />
+            免下載・立即開玩
+          </div>
+          <button className="account-trigger" onClick={() => setAccountPanelOpen(true)} type="button">
+            <span>{account?.displayName.slice(0, 1).toUpperCase() ?? "人"}</span>
+            {account ? account.displayName : "登入／註冊"}
+          </button>
         </div>
       </header>
 
@@ -502,9 +1155,9 @@ export default function Home() {
             看誰能把運氣變成真正的高分。
           </p>
           <div className="feature-row">
-            <span>✦ 免註冊</span>
+            <span>✦ 訪客也能玩</span>
             <span>✦ 即時同步</span>
-            <span>✦ 戰績保存</span>
+            <span>✦ 登入保存戰績</span>
           </div>
         </div>
 
@@ -530,10 +1183,22 @@ export default function Home() {
             </button>
           </div>
           <div className="form-body">
+            {resumable && (
+              <div className="resume-note">
+                <span>
+                  這個瀏覽器先前在房間 {resumable.code} 是「{resumable.name}」。
+                  <small>要以新玩家加入，請直接在下方填寫名稱。</small>
+                </span>
+                <button onClick={() => resumeAs(resumable)} type="button">
+                  以「{resumable.name}」繼續
+                </button>
+              </div>
+            )}
             <label>
               <span>你的名稱</span>
               <input
                 autoComplete="nickname"
+                disabled={Boolean(account)}
                 maxLength={18}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="例如：骰神阿明"
@@ -587,7 +1252,9 @@ export default function Home() {
                   : "加入這一局"}
               {!busy && <span>→</span>}
             </button>
-            <p className="privacy-note">不需帳號，只要把房間代碼傳給朋友。</p>
+            <p className="privacy-note">
+              {account ? `將以 ${account.displayName} 遊玩並保存戰績。` : "訪客可直接玩；登入後可跨裝置保存戰績。"}
+            </p>
           </div>
         </div>
 
@@ -640,6 +1307,7 @@ export default function Home() {
         <span>YAZY CLUB</span>
         <p>好運會消失，精彩的牌局會留下。</p>
       </footer>
+      {accountLayer}
     </main>
   );
 }

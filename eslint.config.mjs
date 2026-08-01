@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Frozen archive of the retired yazy-club Worker. Kept for reference only,
+    // never built or deployed, so it is not held to the current lint rules.
+    "legacy/**",
   ]),
 ]);
 

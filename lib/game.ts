@@ -16,6 +16,10 @@ export const categoryIds = [
 
 export type CategoryId = (typeof categoryIds)[number];
 
+export function fairDieFromByte(byte: number) {
+  return Number.isInteger(byte) && byte >= 0 && byte < 252 ? (byte % 6) + 1 : null;
+}
+
 export const categories: Array<{
   id: CategoryId;
   label: string;
@@ -70,6 +74,8 @@ export function scoreDice(category: CategoryId, dice: number[]) {
     case "chance":
       return sum;
   }
+
+  return 0;
 }
 
 export function scoreSummary(entries: Array<{ category: string; score: number }>) {

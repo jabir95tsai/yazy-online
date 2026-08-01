@@ -8,6 +8,34 @@
       "when": 1785302595614,
       "tag": "0000_fluffy_polaris",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1785402118324,
+      "tag": "0001_equal_warlock",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785498465928,
+      "tag": "0002_spicy_martin_li",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785502280439,
+      "tag": "0003_next_silver_samurai",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785588680439,
+      "tag": "0004_normalize_turn_deadline",
+      "breakpoints": true
     }
   ]
 }

@@ -1,8 +1,36 @@
-import { and, asc, eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
+import { env } from "cloudflare:workers";
 import { ensureSchema, getDb } from "@/db";
 import { players, rooms, scores } from "@/db/schema";
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/** Shape of a Workers Rate Limiting binding, declared locally so the project
+ *  does not need the full `@cloudflare/workers-types` global surface. */
+type RateLimiter = {
+  limit(input: { key: string }): Promise<{ success: boolean }>;
+};
+
+const limiterEnv = env as { ROOM_CREATE_LIMITER?: RateLimiter };
+
+export function clientIp(request: Request) {
+  return request.headers.get("cf-connecting-ip") ?? "unknown";
+}
+
+/**
+ * Per-IP budget for room creation, backed by the Workers Rate Limiting binding
+ * declared in `wrangler.jsonc` (10 per 60s).
+ *
+ * Fails open when the binding is absent — Miniflare does not provide it in
+ * local dev. Rate limiting protects against abuse rather than enforcing game
+ * correctness, so a missing binding must not block development.
+ */
+export async function withinRoomCreateLimit(request: Request) {
+  const limiter = limiterEnv.ROOM_CREATE_LIMITER;
+  if (!limiter) return true;
+  const { success } = await limiter.limit({ key: clientIp(request) });
+  return success;
+}
 
 export function cleanName(value: unknown) {
   return typeof value === "string" ? value.trim().replace(/\s+/g, " ").slice(0, 18) : "";
@@ -33,53 +61,54 @@ export async function hashToken(token: string) {
   ).join("");
 }
 
-export async function authenticate(roomId: string, playerId: string, token: string) {
-  await ensureSchema();
-  const db = getDb();
-  const [player] = await db
-    .select()
-    .from(players)
-    .where(and(eq(players.id, playerId), eq(players.roomId, roomId)))
-    .limit(1);
-  if (!player || player.tokenHash !== (await hashToken(token))) return null;
-  return player;
-}
-
-export async function getRoomState(code: string) {
+export async function getRoomState(code: string, ifNoneMatch?: string | null) {
   await ensureSchema();
   const db = getDb();
   const [room] = await db.select().from(rooms).where(eq(rooms.code, code)).limit(1);
-  if (!room) return null;
-  const roomPlayers = await db
-    .select({ id: players.id, name: players.name, seat: players.seat })
-    .from(players)
-    .where(eq(players.roomId, room.id))
-    .orderBy(asc(players.seat));
-  const roomScores = await db
-    .select({
-      playerId: scores.playerId,
-      category: scores.category,
-      score: scores.score,
-    })
-    .from(scores)
-    .where(eq(scores.roomId, room.id));
+  if (!room) return { state: null, etag: null, notModified: false };
+  const etag = `W/"${room.updatedAt}:${room.currentSeat}:${room.rollsUsed}"`;
+  if (ifNoneMatch === etag) {
+    return { state: null, etag, notModified: true };
+  }
+  const [roomPlayers, roomScores] = await Promise.all([
+    db
+      .select({ id: players.id, name: players.name, seat: players.seat })
+      .from(players)
+      .where(eq(players.roomId, room.id))
+      .orderBy(asc(players.seat)),
+    db
+      .select({
+        playerId: scores.playerId,
+        category: scores.category,
+        score: scores.score,
+      })
+      .from(scores)
+      .where(eq(scores.roomId, room.id)),
+  ]);
 
   return {
-    room: {
-      id: room.id,
-      code: room.code,
-      status: room.status,
-      maxPlayers: room.maxPlayers,
-      hostPlayerId: room.hostPlayerId,
-      currentSeat: room.currentSeat,
-      round: room.round,
-      dice: JSON.parse(room.diceJson) as number[],
-      rollsUsed: room.rollsUsed,
-      createdAt: room.createdAt,
-      finishedAt: room.finishedAt,
+    state: {
+      room: {
+        id: room.id,
+        code: room.code,
+        status: room.status,
+        maxPlayers: room.maxPlayers,
+        hostPlayerId: room.hostPlayerId,
+        currentSeat: room.currentSeat,
+        round: room.round,
+        dice: JSON.parse(room.diceJson) as number[],
+        held: JSON.parse(room.heldJson) as boolean[],
+        rollsUsed: room.rollsUsed,
+        turnDeadline: room.turnDeadline,
+        createdAt: room.createdAt,
+        updatedAt: room.updatedAt,
+        finishedAt: room.finishedAt,
+      },
+      players: roomPlayers,
+      scores: roomScores,
     },
-    players: roomPlayers,
-    scores: roomScores,
+    etag,
+    notModified: false,
   };
 }
 

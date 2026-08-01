@@ -1,0 +1,28 @@
+name: Yazy Friends CI
+
+# The app lives at the repository root. `legacy/` holds the archived
+# yazy-club build and is deliberately excluded.
+on:
+  push:
+    paths-ignore:
+      - "legacy/**"
+      - "**.md"
+  pull_request:
+    paths-ignore:
+      - "legacy/**"
+      - "**.md"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build

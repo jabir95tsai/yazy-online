@@ -1,14 +1,18 @@
-@import "tailwindcss";
-
 :root {
   --ink: #17150f;
   --paper: #f6f0e5;
   --cream: #fffaf0;
-  --coral: #ef5a3c;
-  --coral-dark: #cf3f27;
+  /* Both tones are tuned to clear WCAG AA against --paper and --cream while
+     keeping the hue. --coral: 3.10:1 (display type only, >=24px).
+     --coral-dark: 4.67:1 as text, 5.30:1 with white on top. */
+  --coral: #ea583b;
+  --coral-dark: #c33b25;
+  /* The coral accent for dark (navy) surfaces — 6.59:1 on --navy. */
+  --coral-on-navy: #f3a08d;
   --navy: #153143;
   --teal: #0e6b66;
   --line: rgba(23, 21, 15, 0.15);
+  --ink-muted: rgba(23, 21, 15, 0.66);
 }
 
 * {
@@ -40,7 +44,8 @@ button {
 
 button:focus-visible,
 input:focus-visible {
-  outline: 3px solid rgba(14, 107, 102, 0.36);
+  box-shadow: 0 0 0 6px white;
+  outline: 3px solid var(--teal);
   outline-offset: 3px;
 }
 
@@ -99,6 +104,42 @@ input:focus-visible {
   font-size: 13px;
   font-weight: 600;
   gap: 9px;
+}
+
+.nav-actions,
+.topbar-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.account-trigger {
+  align-items: center;
+  background: var(--cream);
+  border: 1px solid var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 8px;
+  min-height: 38px;
+  padding: 5px 11px 5px 6px;
+}
+
+.account-trigger > span {
+  align-items: center;
+  background: var(--teal);
+  border-radius: 50%;
+  color: white;
+  display: inline-flex;
+  height: 26px;
+  justify-content: center;
+  width: 26px;
+}
+
+.account-trigger.compact {
+  background: transparent;
+  border-color: var(--line);
 }
 
 .live-dot {
@@ -230,7 +271,7 @@ input:focus-visible {
 
 .form-body input {
   background: white;
-  border: 1px solid rgba(23, 21, 15, 0.35);
+  border: 1px solid rgba(23, 21, 15, 0.5);
   border-radius: 0;
   color: var(--ink);
   height: 52px;
@@ -238,8 +279,14 @@ input:focus-visible {
   width: 100%;
 }
 
+.form-body input:disabled {
+  background: #eee6d8;
+  color: rgba(23, 21, 15, 0.64);
+  cursor: not-allowed;
+}
+
 .form-body input::placeholder {
-  color: rgba(23, 21, 15, 0.35);
+  color: rgba(23, 21, 15, 0.6);
 }
 
 .code-input {
@@ -258,7 +305,7 @@ input:focus-visible {
 
 .player-count button {
   background: white;
-  border: 1px solid rgba(23, 21, 15, 0.35);
+  border: 1px solid rgba(23, 21, 15, 0.5);
   cursor: pointer;
   font-weight: 700;
   height: 46px;
@@ -270,10 +317,13 @@ input:focus-visible {
   color: white;
 }
 
+/* White on --coral is only 3.39:1. These carry 16px/800 label text, which is
+   below the WCAG "large text" threshold, so they need the darker tone (4.78:1).
+   --coral stays for large display type and non-text accents. */
 .primary-action,
 .roll-button {
   align-items: center;
-  background: var(--coral);
+  background: var(--coral-dark);
   border: 1px solid var(--ink);
   box-shadow: 4px 4px 0 var(--ink);
   color: white;
@@ -305,7 +355,7 @@ input:focus-visible {
 }
 
 .privacy-note {
-  color: rgba(23, 21, 15, 0.48);
+  color: var(--ink-muted);
   font-size: 11px;
   margin: -4px 0 0;
   text-align: center;
@@ -318,6 +368,216 @@ input:focus-visible {
   font-size: 12px;
   margin: -5px 0 0;
   padding: 9px 11px;
+}
+
+.resume-note {
+  align-items: center;
+  background: rgba(14, 107, 102, 0.09);
+  border-left: 3px solid var(--teal);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 11px 12px;
+}
+
+.resume-note small {
+  color: rgba(23, 21, 15, 0.62);
+  display: block;
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.resume-note button {
+  background: var(--teal);
+  border: 1px solid var(--ink);
+  color: white;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 8px 11px;
+  white-space: nowrap;
+}
+
+.account-backdrop {
+  align-items: center;
+  background: rgba(10, 23, 32, 0.64);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 50;
+}
+
+.account-panel {
+  background: var(--cream);
+  border: 1px solid var(--ink);
+  box-shadow: 12px 12px 0 var(--navy);
+  max-height: calc(100vh - 48px);
+  max-width: 520px;
+  overflow-y: auto;
+  padding: 38px;
+  position: relative;
+  width: 100%;
+}
+
+.account-panel > h2,
+.profile-heading h2 {
+  font-family: Georgia, "Noto Serif TC", serif;
+  font-size: 34px;
+  font-weight: 500;
+  margin: 0;
+}
+
+.account-close {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 30px;
+  line-height: 1;
+  padding: 4px 8px;
+  position: absolute;
+  right: 14px;
+  top: 12px;
+}
+
+.account-intro {
+  color: rgba(23, 21, 15, 0.62);
+  font-size: 13px;
+  line-height: 1.7;
+  margin: 14px 0 22px;
+}
+
+.auth-tabs {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 24px;
+}
+
+.auth-tabs button {
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 11px;
+}
+
+.auth-tabs button.active {
+  border-bottom-color: var(--coral);
+  color: var(--coral-dark);
+}
+
+.auth-form,
+.auth-form label,
+.profile-field {
+  display: grid;
+  gap: 9px;
+}
+
+.auth-form {
+  gap: 17px;
+}
+
+.auth-form label > span,
+.profile-field > span {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.auth-form input,
+.profile-field input {
+  background: white;
+  border: 1px solid rgba(23, 21, 15, 0.5);
+  height: 50px;
+  padding: 0 14px;
+  width: 100%;
+}
+
+.profile-heading {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.profile-heading .eyebrow {
+  margin-bottom: 4px;
+}
+
+.profile-heading small {
+  color: var(--ink-muted);
+}
+
+.profile-avatar {
+  align-items: center;
+  background: var(--navy);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--coral);
+  color: white;
+  display: inline-flex;
+  flex: 0 0 66px;
+  font-family: Georgia, serif;
+  font-size: 30px;
+  height: 66px;
+  justify-content: center;
+}
+
+.profile-stats {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 24px;
+}
+
+.profile-stats article {
+  background: #eee6d8;
+  display: grid;
+  gap: 4px;
+  padding: 14px 8px;
+  text-align: center;
+}
+
+.profile-stats strong {
+  color: var(--coral-dark);
+  font-family: Georgia, serif;
+  font-size: 24px;
+}
+
+.profile-stats span {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.profile-actions {
+  align-items: center;
+  display: flex;
+  gap: 18px;
+  margin-top: 19px;
+}
+
+.profile-actions .primary-action {
+  flex: 1;
+}
+
+.text-action {
+  background: transparent;
+  border: 0;
+  color: var(--coral-dark);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 12px;
+}
+
+.profile-since {
+  color: var(--ink-muted);
+  font-size: 11px;
+  margin: 18px 0 0;
+  text-align: center;
 }
 
 .hero-dice {
@@ -360,7 +620,7 @@ input:focus-visible {
 }
 
 .history-empty {
-  color: rgba(23, 21, 15, 0.52);
+  color: var(--ink-muted);
   font-size: 14px;
   margin: 28px 0 0;
 }
@@ -395,8 +655,8 @@ input:focus-visible {
 
 .history-list small,
 .history-list article > span:nth-child(2) small {
-  color: rgba(23, 21, 15, 0.48);
-  font-size: 10px;
+  color: var(--ink-muted);
+  font-size: 11px;
 }
 
 .history-list b {
@@ -422,7 +682,7 @@ footer span {
 
 footer p {
   font-size: 11px;
-  opacity: 0.55;
+  opacity: 0.72;
 }
 
 .game-shell {
@@ -508,19 +768,26 @@ footer p {
 }
 
 .player-copy small {
-  color: rgba(23, 21, 15, 0.48);
-  font-size: 9px;
+  color: var(--ink-muted);
+  font-size: 11px;
 }
 
+/* The dashed border and muted avatar carry the "empty slot" read. A blanket
+   opacity would also dim the label text, dropping it to 2.90:1. */
 .player-chip.empty {
   border-style: dashed;
-  opacity: 0.45;
+}
+
+.player-chip.empty .player-copy strong,
+.player-chip.empty .player-copy small {
+  color: var(--ink-muted);
+  font-weight: 600;
 }
 
 .player-chip.empty .avatar {
   background: transparent;
-  border: 1px dashed var(--ink);
-  color: var(--ink);
+  border: 1px dashed var(--ink-muted);
+  color: var(--ink-muted);
 }
 
 .error-banner {
@@ -533,6 +800,7 @@ footer p {
 }
 
 .waiting-card,
+.connecting-card,
 .results-card {
   align-items: center;
   background: var(--cream);
@@ -544,6 +812,22 @@ footer p {
   max-width: 680px;
   padding: 50px 6vw;
   text-align: center;
+}
+
+.connecting {
+  background: var(--paper);
+}
+
+.connecting-card {
+  gap: 13px;
+  margin: auto;
+  min-height: 160px;
+  width: min(520px, calc(100% - 40px));
+}
+
+.connecting-card p {
+  font-weight: 800;
+  margin: 0;
 }
 
 .waiting-dice {
@@ -568,7 +852,7 @@ footer p {
 }
 
 .waiting-card > p:not(.eyebrow) {
-  color: rgba(23, 21, 15, 0.58);
+  color: var(--ink-muted);
   line-height: 1.7;
   margin: 17px 0 26px;
 }
@@ -583,8 +867,8 @@ footer p {
 }
 
 .code-display span {
-  color: rgba(23, 21, 15, 0.48);
-  font-size: 10px;
+  color: var(--ink-muted);
+  font-size: 11px;
 }
 
 .code-display strong {
@@ -637,7 +921,7 @@ footer p {
 }
 
 .turn-heading .eyebrow {
-  color: #f3a08d;
+  color: var(--coral-on-navy);
 }
 
 .turn-heading h1 {
@@ -651,8 +935,36 @@ footer p {
 .roll-count {
   border: 1px solid rgba(255, 255, 255, 0.28);
   font-family: var(--font-geist-mono), monospace;
-  font-size: 10px;
+  font-size: 11px;
   padding: 9px 11px;
+}
+
+.turn-timeout {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  border-left: 3px solid var(--coral-on-navy);
+  display: flex;
+  font-size: 12px;
+  font-weight: 700;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding: 10px 12px;
+  position: relative;
+  z-index: 1;
+}
+
+.turn-timeout.expired {
+  background: rgba(239, 90, 60, 0.2);
+}
+
+.turn-timeout button {
+  background: var(--coral);
+  border: 1px solid white;
+  color: white;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 8px 11px;
 }
 
 .dice-tray {
@@ -666,11 +978,48 @@ footer p {
   z-index: 1;
 }
 
+@keyframes dice-hop {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  24% {
+    transform: translateY(-24px) scale(1.05);
+  }
+  52% {
+    transform: translateY(5px) scale(0.96);
+  }
+  76% {
+    transform: translateY(-11px) scale(1.03);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dice-cube-roll {
+  0% {
+    transform: rotateX(var(--die-x)) rotateY(var(--die-y)) rotateZ(0deg);
+  }
+  30% {
+    transform: rotateX(calc(var(--die-x) + 220deg))
+      rotateY(calc(var(--die-y) + 310deg)) rotateZ(74deg);
+  }
+  68% {
+    transform: rotateX(calc(var(--die-x) + 510deg))
+      rotateY(calc(var(--die-y) + 545deg)) rotateZ(168deg);
+  }
+  100% {
+    transform: rotateX(calc(var(--die-x) + 720deg))
+      rotateY(calc(var(--die-y) + 720deg)) rotateZ(360deg);
+  }
+}
+
 .die {
+  --cube-size: clamp(44px, 6.2vw, 82px);
   aspect-ratio: 1;
-  background: #fffdf5;
-  border: 2px solid #0a1720;
-  box-shadow: 7px 9px 0 rgba(0, 0, 0, 0.3);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
   color: var(--navy);
   cursor: pointer;
   display: grid;
@@ -678,10 +1027,145 @@ footer p {
   padding: 0;
   place-content: center;
   position: relative;
+  perspective: 680px;
   transition: transform 160ms ease;
 }
 
-.die span {
+.die.rolling {
+  animation: dice-hop 680ms cubic-bezier(0.2, 0.78, 0.28, 1) both;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.die.rolling:nth-child(2) {
+  animation-delay: -70ms;
+}
+
+.die.rolling:nth-child(3) {
+  animation-delay: -135ms;
+}
+
+.die.rolling:nth-child(4) {
+  animation-delay: -45ms;
+}
+
+.die.rolling:nth-child(5) {
+  animation-delay: -110ms;
+}
+
+.die-cube {
+  display: block;
+  height: var(--cube-size);
+  position: relative;
+  transform: rotateX(var(--die-x)) rotateY(var(--die-y));
+  transform-style: preserve-3d;
+  transition: transform 320ms cubic-bezier(0.22, 0.8, 0.25, 1);
+  width: var(--cube-size);
+}
+
+.die.rolling .die-cube {
+  animation: dice-cube-roll 680ms cubic-bezier(0.18, 0.72, 0.2, 1) both;
+  transition: none;
+}
+
+.die.rolling:nth-child(2) .die-cube {
+  animation-delay: -70ms;
+}
+
+.die.rolling:nth-child(3) .die-cube {
+  animation-delay: -135ms;
+}
+
+.die.rolling:nth-child(4) .die-cube {
+  animation-delay: -45ms;
+}
+
+.die.rolling:nth-child(5) .die-cube {
+  animation-delay: -110ms;
+}
+
+.die-face {
+  backface-visibility: hidden;
+  background: linear-gradient(145deg, #fffef8 0%, #efe9d8 100%);
+  border: 1px solid rgba(10, 23, 32, 0.42);
+  border-radius: 14%;
+  box-shadow:
+    inset 3px 3px 6px rgba(255, 255, 255, 0.92),
+    inset -4px -5px 7px rgba(10, 23, 32, 0.13);
+  display: grid;
+  grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+  height: 100%;
+  left: 0;
+  padding: 14%;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.die-face.face-1 {
+  transform: translateZ(calc(var(--cube-size) / 2));
+}
+
+.die-face.face-2 {
+  transform: rotateX(90deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.die-face.face-3 {
+  transform: rotateY(90deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.die-face.face-4 {
+  transform: rotateY(-90deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.die-face.face-5 {
+  transform: rotateX(-90deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.die-face.face-6 {
+  transform: rotateY(180deg) translateZ(calc(var(--cube-size) / 2));
+}
+
+.pip {
+  align-self: center;
+  background: var(--navy);
+  border-radius: 50%;
+  box-shadow: inset 1px 1px 2px rgba(255, 255, 255, 0.32);
+  display: block;
+  height: 56%;
+  justify-self: center;
+  width: 56%;
+}
+
+.pip-1 {
+  grid-area: 1 / 1;
+}
+
+.pip-3 {
+  grid-area: 1 / 3;
+}
+
+.pip-4 {
+  grid-area: 2 / 1;
+}
+
+.pip-5 {
+  grid-area: 2 / 2;
+}
+
+.pip-6 {
+  grid-area: 2 / 3;
+}
+
+.pip-7 {
+  grid-area: 3 / 1;
+}
+
+.pip-9 {
+  grid-area: 3 / 3;
+}
+
+.die-placeholder {
   font-size: clamp(47px, 7vw, 88px);
   line-height: 0.9;
 }
@@ -691,17 +1175,21 @@ footer p {
 }
 
 .die.held {
-  border-color: var(--coral);
-  box-shadow: 0 0 0 4px var(--coral), 7px 9px 0 rgba(0, 0, 0, 0.3);
+  box-shadow: none;
   transform: translateY(-10px);
 }
 
+.die.held .die-cube {
+  filter: drop-shadow(0 0 7px rgba(239, 90, 60, 0.9));
+}
+
 .die small {
-  background: var(--coral);
+  /* coral-dark, not coral: white on coral is only 3.39:1 */
+  background: var(--coral-dark);
   bottom: -10px;
   color: white;
   font-family: var(--font-geist-mono), monospace;
-  font-size: 8px;
+  font-size: 11px;
   left: 50%;
   letter-spacing: 0.12em;
   padding: 4px 7px;
@@ -773,6 +1261,51 @@ footer p {
   font-size: 30px;
 }
 
+.score-player-tabs {
+  border-bottom: 1px solid var(--ink);
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 12px;
+  scrollbar-width: thin;
+}
+
+.score-player-tabs button {
+  align-items: center;
+  background: rgba(23, 21, 15, 0.04);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 11px;
+  gap: 8px;
+  justify-content: space-between;
+  min-width: 100px;
+  padding: 8px 10px;
+}
+
+.score-player-tabs button:hover {
+  border-color: var(--coral);
+}
+
+.score-player-tabs button:focus-visible {
+  box-shadow: 0 0 0 5px white;
+  outline: 3px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.score-player-tabs button.active {
+  background: var(--coral-dark);
+  border-color: var(--ink);
+  color: white;
+}
+
+.score-player-tabs button b {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+}
+
 .score-list {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -813,8 +1346,8 @@ footer p {
 }
 
 .score-row small {
-  color: rgba(23, 21, 15, 0.42);
-  font-size: 8px;
+  color: var(--ink-muted);
+  font-size: 11px;
 }
 
 .score-row b {
@@ -829,6 +1362,10 @@ footer p {
 
 .score-row.scored b {
   color: var(--ink);
+}
+
+.score-row.readonly:not(.scored) {
+  background: rgba(23, 21, 15, 0.015);
 }
 
 .bonus-row {
@@ -850,13 +1387,13 @@ footer p {
 }
 
 .bonus-row small {
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 400;
-  opacity: 0.5;
+  opacity: 0.68;
 }
 
 .bonus-row strong {
-  color: #f3a08d;
+  color: var(--coral-on-navy);
   font-size: 12px;
 }
 
@@ -907,10 +1444,17 @@ footer p {
   order: 3;
 }
 
+/* Rank sits on the light "stone" podium for 2nd place down, where coral only
+   reaches 2.84:1. The winner's plinth is navy, so it takes the dark-surface
+   accent instead. */
 .podium-place .rank {
-  color: var(--coral);
+  color: var(--ink);
   font-family: Georgia, serif;
   font-size: 18px;
+}
+
+.podium-place.place-1 .rank {
+  color: var(--coral-on-navy);
 }
 
 .podium-place strong {
@@ -923,8 +1467,8 @@ footer p {
 }
 
 .podium-place small {
-  font-size: 8px;
-  opacity: 0.55;
+  font-size: 11px;
+  opacity: 0.72;
 }
 
 @media (max-width: 960px) {
@@ -977,7 +1521,40 @@ footer p {
   }
 
   .online-badge {
-    font-size: 10px;
+    display: none;
+  }
+
+  .nav-actions,
+  .topbar-actions {
+    gap: 6px;
+  }
+
+  .account-trigger.compact {
+    font-size: 0;
+    padding-right: 6px;
+  }
+
+  .account-trigger.compact > span {
+    font-size: 12px;
+  }
+
+  .account-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .account-panel {
+    border-bottom: 0;
+    border-left: 0;
+    border-right: 0;
+    box-shadow: none;
+    max-height: 92vh;
+    max-width: none;
+    padding: 34px 22px 26px;
+  }
+
+  .profile-stats {
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .hero {
@@ -1065,11 +1642,7 @@ footer p {
     padding: 50px 0;
   }
 
-  .die {
-    box-shadow: 3px 5px 0 rgba(0, 0, 0, 0.3);
-  }
-
-  .die span {
+  .die-placeholder {
     font-size: 48px;
   }
 
@@ -1100,6 +1673,7 @@ footer p {
   }
 
   .waiting-card,
+  .connecting-card,
   .results-card {
     border-left: 0;
     border-right: 0;
@@ -1136,6 +1710,8 @@ footer p {
   *,
   *::before,
   *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
