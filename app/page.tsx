@@ -157,6 +157,8 @@ export default function Home() {
   const rollAnimationTimer = useRef<number | null>(null);
   const holdSyncTimer = useRef<number | null>(null);
   const holdRequestRef = useRef<Promise<void> | null>(null);
+  /** Hold selection waiting out the debounce window, not yet sent. */
+  const pendingHoldRef = useRef<boolean[] | null>(null);
   const actionBusyRef = useRef(false);
 
   const startRollAnimation = useCallback(() => {
@@ -243,6 +245,9 @@ export default function Home() {
         !turnChanged &&
         next.room.rollsUsed > (previous?.room.rollsUsed ?? 0);
       if (!previous || turnChanged || previous.room.rollsUsed !== next.room.rollsUsed) {
+        // The roll or turn this selection belonged to is over, so anything
+        // still queued would be sent against a stale room.
+        pendingHoldRef.current = null;
         heldRef.current = next.room.held;
         setHeld(next.room.held);
       }
@@ -513,15 +518,19 @@ export default function Home() {
     setBusy(true);
     setError("");
     try {
-      if (
-        (actionName === "roll" || actionName === "score") &&
-        holdSyncTimer.current !== null
-      ) {
-        window.clearTimeout(holdSyncTimer.current);
-        holdSyncTimer.current = null;
-      }
-      if (holdRequestRef.current) {
-        await holdRequestRef.current;
+      if (actionName === "roll") {
+        // The server decides which dice survive from `rooms.held_json`, so a
+        // hold still inside its debounce window has to be stored before the
+        // reroll. Rolling anyway would silently reroll a die the player had
+        // already clicked to keep, so a failed sync aborts the roll instead.
+        if (!(await flushPendingHold())) {
+          setError("鎖骰狀態尚未同步，請再按一次擲骰。");
+          return;
+        }
+      } else {
+        // Scoring and skipping end the turn, which clears the held dice
+        // anyway, so a queued hold is not worth a round trip.
+        await discardPendingHold();
       }
       if (actionName === "roll") startRollAnimation();
 
@@ -583,25 +592,49 @@ export default function Home() {
     );
     heldRef.current = nextHeld;
     setHeld(nextHeld);
+    pendingHoldRef.current = nextHeld;
     if (holdSyncTimer.current !== null) {
       window.clearTimeout(holdSyncTimer.current);
       holdSyncTimer.current = null;
     }
     holdSyncTimer.current = window.setTimeout(() => {
       holdSyncTimer.current = null;
-      const previousRequest = holdRequestRef.current;
-      const request = (async () => {
-        if (previousRequest) await previousRequest;
-        const latestState = stateRef.current;
-        if (
-          !latestState ||
-          latestState.room.code !== session.code ||
-          latestState.players.find((player) => player.id === session.playerId)?.seat !==
-            latestState.room.currentSeat
-        ) {
-          return;
-        }
-        try {
+      void sendPendingHold();
+    }, 120);
+  }
+
+  /**
+   * Push the debounced hold selection to the server.
+   *
+   * The server treats `rooms.held_json` as the only source of truth for which
+   * dice survive a reroll, so a selection that never gets sent is a selection
+   * that never happened.
+   */
+  function sendPendingHold(): Promise<boolean> {
+    const nextHeld = pendingHoldRef.current;
+    if (!session || !nextHeld) {
+      return (holdRequestRef.current ?? Promise.resolve()).then(() => true);
+    }
+    pendingHoldRef.current = null;
+    const previousRequest = holdRequestRef.current;
+    const request = (async () => {
+      if (previousRequest) await previousRequest;
+      try {
+        // A hold is rejected with 409 when the room moved on between reading
+        // state and sending — most often a poll landing on the same tick.
+        // Re-read and try once more, because giving up here would let the
+        // caller reroll a die the player had already chosen to keep.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const latestState = stateRef.current;
+          if (
+            !latestState ||
+            latestState.room.code !== session.code ||
+            latestState.players.find((player) => player.id === session.playerId)?.seat !==
+              latestState.room.currentSeat ||
+            latestState.room.rollsUsed < 1
+          ) {
+            return false;
+          }
           const response = await fetch(`/api/rooms/${session.code}/action`, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -619,10 +652,11 @@ export default function Home() {
           };
           if (!response.ok) {
             await fetchRoom(session.code, true);
+            if (response.status === 409 && attempt === 0) continue;
             if (response.status !== 409) {
               setError(data.error ?? "無法同步鎖骰狀態。");
             }
-            return;
+            return false;
           }
           const current = stateRef.current;
           if (current?.room.code === session.code && data.updatedAt) {
@@ -637,16 +671,45 @@ export default function Home() {
             stateRef.current = nextState;
             setState(nextState);
           }
-        } catch {
-          await fetchRoom(session.code, true);
-          setError("無法同步鎖骰狀態，請再試一次。");
+          return true;
         }
-      })();
-      holdRequestRef.current = request;
-      void request.finally(() => {
-        if (holdRequestRef.current === request) holdRequestRef.current = null;
-      });
-    }, 120);
+        return false;
+      } catch {
+        await fetchRoom(session.code, true);
+        setError("無法同步鎖骰狀態，請再試一次。");
+        return false;
+      }
+    })();
+    const tracked = request.then(() => undefined);
+    holdRequestRef.current = tracked;
+    void tracked.finally(() => {
+      if (holdRequestRef.current === tracked) holdRequestRef.current = null;
+    });
+    return request;
+  }
+
+  /**
+   * Send a hold that is still sitting in the debounce window, instead of
+   * waiting out the remaining delay.
+   *
+   * Resolves true only once the server has actually stored the selection.
+   */
+  function flushPendingHold(): Promise<boolean> {
+    if (holdSyncTimer.current !== null) {
+      window.clearTimeout(holdSyncTimer.current);
+      holdSyncTimer.current = null;
+    }
+    return sendPendingHold();
+  }
+
+  /** Drop a debounced hold that the next action makes irrelevant. */
+  function discardPendingHold(): Promise<void> {
+    if (holdSyncTimer.current !== null) {
+      window.clearTimeout(holdSyncTimer.current);
+      holdSyncTimer.current = null;
+    }
+    pendingHoldRef.current = null;
+    return holdRequestRef.current ?? Promise.resolve();
   }
 
   function resumeAs(previous: Session) {
@@ -678,6 +741,7 @@ export default function Home() {
       window.clearTimeout(holdSyncTimer.current);
       holdSyncTimer.current = null;
     }
+    pendingHoldRef.current = null;
     setError("");
     window.history.replaceState({}, "", window.location.pathname);
     // The game just played is only in the history once it is finished, so the
