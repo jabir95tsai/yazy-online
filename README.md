@@ -5,9 +5,6 @@
 
 正式網站：<https://yazy-online.jabir95tsai.workers.dev>
 
-舊網址 `yazy-friends.jabir95tsai.workers.dev` 仍保留運作（有進行中的對局），
-但不再更新，僅供既有玩家過渡使用。
-
 ## 本機執行
 
 需要 Node.js `>=22.13.0`。
@@ -36,9 +33,6 @@ D1 資料庫的 Cloudflare 註冊名稱仍是 `yazy-friends-db`——D1 資料�
 無法改名（沒有對應的 CLI 或 API），因此 `wrangler.jsonc` 與
 `vite.config.ts` 裡的 `database_name` 保持不變；實際綁定用的是
 `database_id`，不受影響。
-
-`legacy/yazy-club/` 是已停用的舊版 Worker，僅作保存與查閱之用，
-不會被建置、部署、lint 或 CI 檢查。請勿在其中新增功能。
 
 ## 限流
 

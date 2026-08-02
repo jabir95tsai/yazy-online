@@ -1,15 +1,11 @@
 name: Yazy Online CI
 
-# The app lives at the repository root. `legacy/` holds the archived
-# yazy-club build and is deliberately excluded.
 on:
   push:
     paths-ignore:
-      - "legacy/**"
       - "**.md"
   pull_request:
     paths-ignore:
-      - "legacy/**"
       - "**.md"
 
 jobs:
