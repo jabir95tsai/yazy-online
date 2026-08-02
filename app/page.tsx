@@ -358,6 +358,21 @@ export default function Home() {
     (player) => player.id === viewedPlayerId,
   );
   const viewingMyScore = viewedPlayerId === session?.playerId;
+  /**
+   * Whether the card being looked at belongs to the player who owns the dice
+   * currently on the table.
+   *
+   * Potential scores are a property of the dice, not of who is looking, so the
+   * preview follows the roller onto anyone else's view of their card. It stays
+   * blank on a card belonging to someone who is not rolling, where the dice
+   * would say nothing about what that player can take.
+   */
+  const viewedPlayerIsRolling = Boolean(
+    state &&
+      state.room.status === "playing" &&
+      viewedPlayer &&
+      viewedPlayer.seat === state.room.currentSeat,
+  );
   const viewedScores = useMemo(
     () => state?.scores.filter((score) => score.playerId === viewedPlayerId) ?? [],
     [state?.scores, viewedPlayerId],
@@ -1096,7 +1111,9 @@ export default function Home() {
                       ? isMyTurn
                         ? "選擇計分格"
                         : "我的計分卡"
-                      : `${viewedPlayer?.name ?? "玩家"}的計分卡`}
+                      : viewedPlayerIsRolling
+                        ? `${viewedPlayer?.name ?? "玩家"}可選的分數`
+                        : `${viewedPlayer?.name ?? "玩家"}的計分卡`}
                   </h2>
                 </div>
                 <strong>{viewedSummary.total}</strong>
@@ -1129,7 +1146,7 @@ export default function Home() {
                     (score) => score.category === category.id,
                   );
                   const preview =
-                    viewingMyScore && isMyTurn && state.room.rollsUsed > 0
+                    viewedPlayerIsRolling && state.room.rollsUsed > 0
                       ? scoreDice(category.id, state.room.dice)
                       : null;
                   return (
