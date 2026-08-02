@@ -11,25 +11,49 @@ type RateLimiter = {
   limit(input: { key: string }): Promise<{ success: boolean }>;
 };
 
-const limiterEnv = env as { ROOM_CREATE_LIMITER?: RateLimiter };
+const limiterEnv = env as {
+  ROOM_CREATE_LIMITER?: RateLimiter;
+  AUTH_LIMITER?: RateLimiter;
+};
 
 export function clientIp(request: Request) {
   return request.headers.get("cf-connecting-ip") ?? "unknown";
 }
 
 /**
- * Per-IP budget for room creation, backed by the Workers Rate Limiting binding
- * declared in `wrangler.jsonc` (10 per 60s).
+ * Consume one unit from a Workers Rate Limiting binding.
  *
- * Fails open when the binding is absent — Miniflare does not provide it in
- * local dev. Rate limiting protects against abuse rather than enforcing game
- * correctness, so a missing binding must not block development.
+ * Fails open when the binding is absent — Miniflare does not always provide
+ * these in local dev. Rate limiting protects against abuse rather than
+ * enforcing correctness, so a missing binding must not block development.
  */
-export async function withinRoomCreateLimit(request: Request) {
-  const limiter = limiterEnv.ROOM_CREATE_LIMITER;
+async function withinLimit(limiter: RateLimiter | undefined, key: string) {
   if (!limiter) return true;
-  const { success } = await limiter.limit({ key: clientIp(request) });
+  const { success } = await limiter.limit({ key });
   return success;
+}
+
+/** Per-IP budget for room creation (10 per 60s). */
+export async function withinRoomCreateLimit(request: Request) {
+  return withinLimit(limiterEnv.ROOM_CREATE_LIMITER, clientIp(request));
+}
+
+/**
+ * Budget for credential endpoints (10 per 60s), checked on two independent
+ * keys:
+ *
+ * - by IP, so one host cannot grind through many accounts;
+ * - by target username, so a distributed attempt against a single account is
+ *   still throttled even though each source IP looks quiet.
+ *
+ * `username` is omitted for registration, where there is no account under
+ * attack yet.
+ */
+export async function withinAuthLimit(request: Request, username?: string) {
+  const limiter = limiterEnv.AUTH_LIMITER;
+  if (!(await withinLimit(limiter, `ip:${clientIp(request)}`))) return false;
+  if (username && !(await withinLimit(limiter, `user:${username}`))) return false;
+  return true;
 }
 
 export function cleanName(value: unknown) {

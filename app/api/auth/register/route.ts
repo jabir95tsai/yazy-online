@@ -5,15 +5,28 @@ import {
   accountCookie,
   createAccountSession,
   hashPassword,
+  linkGuestPlayers,
   makePasswordSalt,
   validateAccountInput,
 } from "@/lib/auth";
-import { apiError } from "@/lib/server";
+import { apiError, withinAuthLimit } from "@/lib/server";
 
 export async function POST(request: Request) {
   try {
     await ensureSchema();
-    const validated = validateAccountInput(await request.json());
+    if (!(await withinAuthLimit(request))) {
+      return Response.json(
+        { error: "嘗試次數過多，請稍後再試。" },
+        { status: 429, headers: { "retry-after": "60" } },
+      );
+    }
+    const body = (await request.json()) as {
+      username?: unknown;
+      password?: unknown;
+      displayName?: unknown;
+      sessions?: unknown;
+    };
+    const validated = validateAccountInput(body);
     if ("error" in validated) {
       return Response.json({ error: validated.error }, { status: 400 });
     }
@@ -37,6 +50,7 @@ export async function POST(request: Request) {
       createdAt: now,
       updatedAt: now,
     });
+    await linkGuestPlayers(id, body.sessions);
     const token = await createAccountSession(id);
     return Response.json(
       { user: { id, username: validated.username, displayName: validated.displayName, createdAt: now } },

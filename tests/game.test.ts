@@ -6,7 +6,13 @@ import {
   upsertBrowserSession,
   type BrowserSession,
 } from "../lib/browser-session.ts";
+import { abandonedRoomCutoff } from "../lib/cleanup.ts";
 import { fairDieFromByte, scoreDice, scoreSummary } from "../lib/game.ts";
+import {
+  LEGACY_PBKDF2_ITERATIONS,
+  parseHash,
+  serializeHash,
+} from "../lib/password-hash.ts";
 
 test("scores upper section and combinations", () => {
   assert.equal(scoreDice("sixes", [6, 6, 6, 2, 1]), 18);
@@ -98,4 +104,37 @@ test("an unknown active player id does not fall back to another session", () => 
   });
 
   assert.equal(selectBrowserSession(sessions, "ABC123", "player-gone"), null);
+});
+
+test("password hashes round-trip the cost they were written with", () => {
+  const stored = serializeHash(48_000, "abc123");
+  assert.equal(stored, "48000:abc123");
+  assert.deepEqual(parseHash(stored), { iterations: 48_000, digest: "abc123" });
+
+  // Raising the constant later must not change how an older row is verified,
+  // otherwise every existing password stops matching.
+  assert.deepEqual(parseHash(serializeHash(600_000, "def456")), {
+    iterations: 600_000,
+    digest: "def456",
+  });
+});
+
+test("password hashes written before the cost was recorded still verify", () => {
+  // Bare digest, no `<iterations>:` prefix.
+  assert.deepEqual(parseHash("bare-digest-no-prefix"), {
+    iterations: LEGACY_PBKDF2_ITERATIONS,
+    digest: "bare-digest-no-prefix",
+  });
+  // A malformed prefix must fall back rather than derive with NaN iterations.
+  assert.equal(parseHash("notanumber:digest").iterations, LEGACY_PBKDF2_ITERATIONS);
+  assert.equal(parseHash("0:digest").iterations, LEGACY_PBKDF2_ITERATIONS);
+});
+
+test("abandoned-room cutoff is an ISO-8601 UTC instant in the past", () => {
+  const now = Date.parse("2026-08-02T00:00:00.000Z");
+  assert.equal(abandonedRoomCutoff(now, 7), "2026-07-26T00:00:00.000Z");
+  // The comparison is a string compare against `rooms.updated_at`, so the
+  // format has to match exactly what the app writes.
+  assert.match(abandonedRoomCutoff(now), /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+  assert.ok(abandonedRoomCutoff(now) < new Date(now).toISOString());
 });

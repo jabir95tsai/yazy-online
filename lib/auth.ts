@@ -1,12 +1,32 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import { env } from "cloudflare:workers";
-import { accountSessions, users } from "@/db/schema";
+import { accountSessions, players, users } from "@/db/schema";
 import { ensureSchema, getDb } from "@/db";
+import { parseHash, serializeHash } from "@/lib/password-hash";
 import { cleanName, hashToken } from "@/lib/server";
 
 const COOKIE_NAME = "yazy_account";
 const SESSION_DAYS = 30;
-const PBKDF2_ITERATIONS = 100_000;
+/**
+ * PBKDF2 cost for newly written passwords.
+ *
+ * OWASP recommends 600,000 for PBKDF2-HMAC-SHA256, which measures ~64ms of
+ * pure CPU. This Worker runs on the Cloudflare Free plan, which allows only
+ * 10ms CPU per request, so 600k — and even the previous 100k (~11ms) — would
+ * blow the budget and fail the request outright.
+ *
+ * The compensating control is AUTH_PEPPER: passwords are HMAC'd with a secret
+ * held outside the database, so a database leak alone yields nothing to crack
+ * at any iteration count. Iterations only become the last line of defence if
+ * the Worker secret leaks too.
+ *
+ * The cost is recorded per stored hash (see `serializeHash`), so this can be
+ * raised later — on a paid plan, or with different hardware — without
+ * invalidating existing passwords.
+ */
+const PBKDF2_ITERATIONS = 48_000;
+/** Fixed salt used only to equalise timing for unknown usernames. */
+const DUMMY_SALT = "00000000000000000000000000000000";
 const runtimeEnv = env as { AUTH_PEPPER?: string };
 
 export type AccountUser = {
@@ -51,7 +71,7 @@ export function validateAccountInput(input: {
   return { username, password, displayName };
 }
 
-export async function hashPassword(password: string, saltHex: string) {
+async function deriveHash(password: string, saltHex: string, iterations: number) {
   const passwordBytes = new TextEncoder().encode(password);
   let passwordMaterial: BufferSource = passwordBytes;
   if (runtimeEnv.AUTH_PEPPER) {
@@ -72,26 +92,41 @@ export async function hashPassword(password: string, saltHex: string) {
     ["deriveBits"],
   );
   const result = await crypto.subtle.deriveBits(
-    {
-      name: "PBKDF2",
-      hash: "SHA-256",
-      salt: hexToBytes(saltHex),
-      iterations: PBKDF2_ITERATIONS,
-    },
+    { name: "PBKDF2", hash: "SHA-256", salt: hexToBytes(saltHex), iterations },
     material,
     256,
   );
   return bytesToHex(new Uint8Array(result));
 }
 
+export async function hashPassword(password: string, saltHex: string) {
+  return serializeHash(
+    PBKDF2_ITERATIONS,
+    await deriveHash(password, saltHex, PBKDF2_ITERATIONS),
+  );
+}
+
 export async function verifyPassword(password: string, salt: string, expected: string) {
-  const actual = await hashPassword(password, salt);
-  if (actual.length !== expected.length) return false;
+  const { iterations, digest } = parseHash(expected);
+  const actual = await deriveHash(password, salt, iterations);
+  if (actual.length !== digest.length) return false;
   let difference = 0;
   for (let index = 0; index < actual.length; index += 1) {
-    difference |= actual.charCodeAt(index) ^ expected.charCodeAt(index);
+    difference |= actual.charCodeAt(index) ^ digest.charCodeAt(index);
   }
   return difference === 0;
+}
+
+/**
+ * Burn the same work a real verification would, for logins naming an account
+ * that does not exist.
+ *
+ * Without this, "no such user" returns immediately while a wrong password for
+ * a real user pays for a full PBKDF2 derivation. That timing gap lets an
+ * attacker enumerate which usernames are registered.
+ */
+export async function fakeVerifyPassword(password: string) {
+  await hashPassword(password, DUMMY_SALT);
 }
 
 function readCookie(request: Request) {
@@ -163,4 +198,56 @@ export function clearAccountCookie() {
 
 export function makePasswordSalt() {
   return randomHex(16);
+}
+
+/**
+ * Attach guest players already sitting in this browser to a freshly
+ * authenticated account.
+ *
+ * A guest who joins a room and only signs in afterwards would otherwise keep
+ * `players.user_id` NULL forever, so the finished game never reaches their
+ * account history — contradicting the "登入保存戰績" promise on the landing
+ * page.
+ *
+ * Each claim must be proven with the player's own token, so signing in cannot
+ * be used to harvest someone else's players, and rows already owned by an
+ * account are left untouched.
+ */
+export async function linkGuestPlayers(
+  userId: string,
+  sessions: unknown,
+): Promise<number> {
+  const claims = (Array.isArray(sessions) ? sessions : [])
+    .filter(
+      (item): item is { playerId: string; token: string } =>
+        typeof item?.playerId === "string" && typeof item?.token === "string",
+    )
+    .slice(-20);
+  if (!claims.length) return 0;
+
+  const db = getDb();
+  const [rows, hashes] = await Promise.all([
+    db
+      .select({ id: players.id, tokenHash: players.tokenHash })
+      .from(players)
+      .where(
+        and(
+          inArray(
+            players.id,
+            claims.map((claim) => claim.playerId),
+          ),
+          isNull(players.userId),
+        ),
+      ),
+    Promise.all(claims.map((claim) => hashToken(claim.token))),
+  ]);
+
+  const expected = new Map(claims.map((claim, index) => [claim.playerId, hashes[index]]));
+  const claimable = rows
+    .filter((row) => row.tokenHash === expected.get(row.id))
+    .map((row) => row.id);
+  if (!claimable.length) return 0;
+
+  await db.update(players).set({ userId }).where(inArray(players.id, claimable));
+  return claimable.length;
 }

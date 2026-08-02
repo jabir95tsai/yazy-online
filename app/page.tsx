@@ -441,6 +441,12 @@ export default function Home() {
           username: authUsername,
           password: authPassword,
           displayName: authDisplayName,
+          // Hands over the guest identities held in this browser so games
+          // played before signing in are attached to the account.
+          sessions: readSessions().map(({ playerId, token }) => ({
+            playerId,
+            token,
+          })),
         }),
       });
       const data = (await response.json()) as { user?: AccountUser; error?: string };

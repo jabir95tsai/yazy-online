@@ -1,3 +1,4 @@
+import type { D1Database } from "@cloudflare/workers-types";
 import { env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/d1";
 import * as schema from "./schema";
@@ -94,7 +95,7 @@ export function ensureSchema() {
         d1.prepare("CREATE INDEX IF NOT EXISTS scores_room_idx ON scores(room_id)"),
       ])
       .then(() => undefined)
-      .catch((error) => {
+      .catch((error: unknown) => {
         schemaReady = null;
         throw error;
       });

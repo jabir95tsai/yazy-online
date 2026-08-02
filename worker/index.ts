@@ -1,8 +1,14 @@
+import type { D1Database } from "@cloudflare/workers-types";
 import handler from "vinext/server/app-router-entry";
-import { cleanupExpiredSessions } from "@/lib/cleanup";
+import { runScheduledCleanup } from "@/lib/cleanup";
 
 interface Env {
-  ASSETS: Fetcher;
+  // Described with the DOM `Request`/`Response` rather than the Workers
+  // `Fetcher`, because this binding is handed straight to vinext, whose
+  // handler is typed against the DOM shapes. The two differ (the Workers
+  // `Request` carries an extra `fetcher` property) and using `Fetcher` here
+  // makes the call to `handler.fetch` below fail to typecheck.
+  ASSETS: { fetch(request: Request): Response | Promise<Response> };
   DB: D1Database;
 }
 
@@ -18,7 +24,7 @@ const worker = {
 
   scheduled(_controller: unknown, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(
-      cleanupExpiredSessions(env.DB).then((result) => {
+      runScheduledCleanup(env.DB).then((result) => {
         console.info("YAZY cleanup completed", result);
       }),
     );
