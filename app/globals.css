@@ -1191,8 +1191,20 @@ footer p {
   transform: translateY(-10px);
 }
 
-.die.held .die-cube {
-  filter: drop-shadow(0 0 7px rgba(239, 90, 60, 0.9));
+/* The held marker must not use `filter`, `opacity`, `mask` or any other
+   grouping property on `.die-cube`.
+   `.die-cube` is the element carrying `transform-style: preserve-3d`, and a
+   grouping property forces its used transform-style to flat. That collapses
+   the six faces onto one plane and paints the front face — the 1 — no matter
+   how the cube is rotated, so holding a die visibly changed its number while
+   the underlying value was still correct.
+   `box-shadow` is not a grouping property, so the ring below is safe. */
+.die.held .die-face {
+  border-color: var(--coral-dark);
+  box-shadow:
+    inset 3px 3px 6px rgba(255, 255, 255, 0.92),
+    inset -4px -5px 7px rgba(10, 23, 32, 0.13),
+    0 0 0 2px var(--coral-dark);
 }
 
 .die small {
