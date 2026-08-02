@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "yazy-friends",
+  "name": "yazy-online",
   "main": "dist/server/index.js",
   "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],
@@ -16,6 +16,11 @@
   "d1_databases": [
     {
       "binding": "DB",
+      // Cloudflare D1 databases cannot be renamed (no CLI or API rename
+      // operation exists) — this must keep matching the database's actual
+      // registered name or `wrangler d1 execute yazy-friends-db` stops
+      // resolving it. The binding itself uses `database_id`, so this name
+      // has no effect on the running app.
       "database_name": "yazy-friends-db",
       "database_id": "9544a7f4-dbf8-4ac3-9e8b-467f9a90fe36",
       "migrations_dir": "drizzle"

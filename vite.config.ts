@@ -25,6 +25,8 @@ const localBindingConfig = {
   d1_databases: [
     {
       binding: "DB",
+      // Must match the D1 database's real registered name (see the matching
+      // comment in wrangler.jsonc) — D1 databases cannot be renamed.
       database_name: "yazy-friends-db",
       database_id: DATABASE_ID,
     },
