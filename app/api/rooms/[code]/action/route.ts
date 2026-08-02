@@ -332,7 +332,14 @@ export async function POST(
         return Response.json({ error: "這回合已經擲滿 3 次。" }, { status: 409 });
       }
       const previous = JSON.parse(room.diceJson) as number[];
-      const held = room.rollsUsed > 0 ? normalizeHeld(body.held) ?? emptyHeld : emptyHeld;
+      // Which dice to keep is read from the room's own held_json, not from
+      // body.held. The client isn't the source of truth for hold state — the
+      // "hold" action already wrote it there. Trusting body.held instead let a
+      // second tab/device signed in as the same player (e.g. via "continue
+      // as") roll with its own stale, unsynced held array and silently
+      // discard a hold the player had just clicked in another tab.
+      const held =
+        room.rollsUsed > 0 ? (JSON.parse(room.heldJson) as boolean[]) : emptyHeld;
       const nextDice = Array.from({ length: 5 }, (_, index) =>
         held[index] && previous[index] ? previous[index] : rollDie(),
       );
@@ -340,7 +347,6 @@ export async function POST(
         .update(rooms)
         .set({
           diceJson: JSON.stringify(nextDice),
-          heldJson: JSON.stringify(held),
           rollsUsed: room.rollsUsed + 1,
           updatedAt: nextTimestamp(room.updatedAt),
         })
