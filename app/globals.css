@@ -1031,9 +1031,14 @@ footer p {
   transition: transform 160ms ease;
 }
 
+/* Deliberately does NOT set `pointer-events: none`.
+   The hop is decoration played after the server has already decided the dice,
+   and it outlasts the request itself. Blocking hits during it silently ate
+   real mouse clicks on a die the player was trying to keep — while leaving the
+   button visibly enabled. Whether a die may be clicked is decided by the
+   button's `disabled` attribute and the guards in `toggleHeld`. */
 .die.rolling {
   animation: dice-hop 680ms cubic-bezier(0.2, 0.78, 0.28, 1) both;
-  pointer-events: none;
   z-index: 2;
 }
 
@@ -1172,6 +1177,13 @@ footer p {
 
 .die:not(:disabled):hover {
   transform: translateY(-5px) rotate(-2deg);
+}
+
+/* Dice are unclickable only while a roll is actually in flight — holding a die
+   whose value is about to be replaced would keep the wrong number. Show that
+   rather than silently swallowing the click. */
+.die:disabled {
+  cursor: default;
 }
 
 .die.held {
