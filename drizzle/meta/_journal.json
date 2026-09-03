@@ -36,6 +36,13 @@
       "when": 1785588680439,
       "tag": "0004_normalize_turn_deadline",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1788422736253,
+      "tag": "0005_add_friends",
+      "breakpoints": true
     }
   ]
 }

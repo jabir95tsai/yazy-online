@@ -37,7 +37,8 @@ export async function cleanupAbandonedRooms(d1: D1Database, now = Date.now()) {
   const cutoff = abandonedRoomCutoff(now);
   const doomed = "SELECT id FROM rooms WHERE status != 'finished' AND updated_at <= ?";
 
-  const [scores, players, rooms] = await d1.batch([
+  const [, scores, players, rooms] = await d1.batch([
+    d1.prepare(`DELETE FROM room_invites WHERE room_id IN (${doomed})`).bind(cutoff),
     d1.prepare(`DELETE FROM scores WHERE room_id IN (${doomed})`).bind(cutoff),
     d1.prepare(`DELETE FROM players WHERE room_id IN (${doomed})`).bind(cutoff),
     d1
@@ -52,9 +53,29 @@ export async function cleanupAbandonedRooms(d1: D1Database, now = Date.now()) {
   };
 }
 
+/**
+ * Drop table invitations that can no longer be acted on.
+ *
+ * An invitation is only joinable while its room is still `waiting`, and
+ * finished rooms are kept forever, so nothing else would ever remove the row
+ * once the game started.
+ */
+export async function cleanupStaleInvites(d1: D1Database) {
+  const invites = await d1
+    .prepare(
+      "DELETE FROM room_invites WHERE room_id IN (SELECT id FROM rooms WHERE status != 'waiting')",
+    )
+    .run();
+
+  return {
+    staleInvites: invites.meta.changes,
+  };
+}
+
 export async function runScheduledCleanup(d1: D1Database) {
   return {
     ...(await cleanupExpiredSessions(d1)),
+    ...(await cleanupStaleInvites(d1)),
     ...(await cleanupAbandonedRooms(d1)),
   };
 }

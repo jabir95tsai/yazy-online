@@ -84,3 +84,54 @@ export const scores = sqliteTable(
     primaryKey({ columns: [table.roomId, table.playerId, table.category] }),
   ],
 );
+
+/**
+ * One row per pair of accounts, whether the friendship is still pending or
+ * already accepted.
+ *
+ * `pairKey` is the two ids sorted and joined, and it is what the unique index
+ * covers: without it A→B and B→A could both be stored, and the two rows would
+ * disagree about who is waiting on whom. A declined or removed friendship is
+ * deleted rather than kept in a third state, so the pair can start over.
+ */
+export const friendships = sqliteTable(
+  "friendships",
+  {
+    id: text("id").primaryKey(),
+    pairKey: text("pair_key").notNull(),
+    requesterId: text("requester_id").notNull().references(() => users.id),
+    addresseeId: text("addressee_id").notNull().references(() => users.id),
+    status: text("status", { enum: ["pending", "accepted"] })
+      .notNull()
+      .default("pending"),
+    createdAt: text("created_at").notNull(),
+    respondedAt: text("responded_at"),
+  },
+  (table) => [
+    uniqueIndex("friendships_pair_unique").on(table.pairKey),
+    index("friendships_requester_idx").on(table.requesterId),
+    index("friendships_addressee_idx").on(table.addresseeId),
+  ],
+);
+
+/**
+ * A friend being asked to a specific table.
+ *
+ * Unique per (room, invitee) so repeated taps on 邀請 cannot pile up rows, and
+ * only meaningful while the room is still `waiting` — reads filter on that and
+ * the scheduled cleanup removes the rest.
+ */
+export const roomInvites = sqliteTable(
+  "room_invites",
+  {
+    id: text("id").primaryKey(),
+    roomId: text("room_id").notNull().references(() => rooms.id),
+    fromUserId: text("from_user_id").notNull().references(() => users.id),
+    toUserId: text("to_user_id").notNull().references(() => users.id),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("room_invites_room_to_unique").on(table.roomId, table.toUserId),
+    index("room_invites_to_idx").on(table.toUserId),
+  ],
+);

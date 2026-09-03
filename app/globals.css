@@ -265,6 +265,7 @@ input:focus-visible {
 
 .form-body label,
 .auth-form label,
+.friend-add label,
 .profile-field {
   display: flex;
   flex-direction: column;
@@ -273,6 +274,7 @@ input:focus-visible {
 
 .form-body label > span,
 .auth-form label > span,
+.friend-add label > span,
 .profile-field > span {
   color: var(--ink-soft);
   font-size: 14px;
@@ -282,6 +284,7 @@ input:focus-visible {
 
 .form-body input,
 .auth-form input,
+.friend-add input,
 .profile-field input {
   background: var(--sunk-strong);
   border: 0;
@@ -297,7 +300,8 @@ input:focus-visible {
 }
 
 .form-body input::placeholder,
-.auth-form input::placeholder {
+.auth-form input::placeholder,
+.friend-add input::placeholder {
   color: var(--ink-muted);
 }
 
@@ -538,6 +542,215 @@ input:focus-visible {
   font-size: 13px;
   margin: 0;
   text-align: center;
+}
+
+/* ── 好友 ─────────────────────────────────────────────── */
+
+.tab-badge {
+  background: var(--accent);
+  border-radius: 999px;
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 800;
+  margin-left: 6px;
+  padding: 2px 7px;
+}
+
+.friends-block,
+.invite-friends {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.friend-add {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.friend-note {
+  color: var(--accent-deep);
+  font-size: 14px;
+  line-height: 1.6;
+  margin: -6px 0 0;
+  padding-left: 4px;
+}
+
+.friend-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.friend-group h3,
+.invite-friends h2 {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin: 0;
+  padding-left: 4px;
+}
+
+.friend-empty {
+  color: var(--ink-muted);
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 0;
+  padding-left: 4px;
+}
+
+.friend-row {
+  align-items: center;
+  background: var(--sunk);
+  border-radius: 18px;
+  display: flex;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.friend-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.friend-copy strong {
+  font-size: 15px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.friend-copy small {
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.friend-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.friend-yes,
+.friend-no,
+.friend-invite {
+  background: var(--chip);
+  border: 0;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.friend-yes,
+.friend-invite {
+  background: var(--accent-wash);
+  color: var(--accent-deep);
+}
+
+.friend-invite {
+  margin-left: auto;
+}
+
+.friend-yes:hover:not(:disabled),
+.friend-invite:hover:not(:disabled) {
+  background: var(--accent-wash-strong);
+}
+
+.friend-no:hover:not(:disabled) {
+  background: var(--sunk-strong);
+}
+
+.friend-yes:disabled,
+.friend-no:disabled,
+.friend-invite:disabled {
+  background: var(--sunk-strong);
+  color: var(--ink-muted);
+  cursor: default;
+}
+
+/* ── 好友的邀請 ───────────────────────────────────────── */
+
+.invite-section {
+  margin: 0 auto;
+  max-width: 568px;
+  padding: 0 26px 34px;
+  width: 100%;
+}
+
+.invite-section h2 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 12px;
+  padding-left: 4px;
+}
+
+.invite-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.invite-list article {
+  align-items: center;
+  background: var(--card);
+  border-radius: 22px;
+  box-shadow: var(--lift-soft);
+  display: flex;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.invite-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.invite-copy strong {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.invite-copy small {
+  color: var(--ink-muted);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.invite-actions {
+  align-items: center;
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.invite-actions .primary-action {
+  font-size: 15px;
+  min-height: 48px;
+  padding: 0 22px;
+}
+
+.invite-actions .text-action {
+  font-size: 13px;
+  padding: 10px 4px;
+  white-space: nowrap;
+}
+
+.invite-friend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
 }
 
 /* ── 上次的桌 ─────────────────────────────────────────── */
@@ -1416,6 +1629,24 @@ button.score-row:hover:not(:disabled) {
 
   .history-section {
     padding: 0 20px 34px;
+  }
+
+  .invite-section {
+    padding: 0 20px 28px;
+  }
+
+  .invite-list article {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .invite-actions {
+    margin-left: 0;
+  }
+
+  .invite-actions .primary-action {
+    flex: 1;
   }
 
   .account-backdrop {

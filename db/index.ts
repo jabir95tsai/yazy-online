@@ -87,12 +87,37 @@ export function ensureSchema() {
             PRIMARY KEY (room_id, player_id, category)
           )
         `),
+        d1.prepare(`
+          CREATE TABLE IF NOT EXISTS friendships (
+            id TEXT PRIMARY KEY NOT NULL,
+            pair_key TEXT NOT NULL,
+            requester_id TEXT NOT NULL REFERENCES users(id),
+            addressee_id TEXT NOT NULL REFERENCES users(id),
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            responded_at TEXT
+          )
+        `),
+        d1.prepare(`
+          CREATE TABLE IF NOT EXISTS room_invites (
+            id TEXT PRIMARY KEY NOT NULL,
+            room_id TEXT NOT NULL REFERENCES rooms(id),
+            from_user_id TEXT NOT NULL REFERENCES users(id),
+            to_user_id TEXT NOT NULL REFERENCES users(id),
+            created_at TEXT NOT NULL
+          )
+        `),
         d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS rooms_code_unique ON rooms(code)"),
         d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS players_room_seat_unique ON players(room_id, seat)"),
         d1.prepare("CREATE INDEX IF NOT EXISTS players_room_idx ON players(room_id)"),
         d1.prepare("CREATE INDEX IF NOT EXISTS players_user_idx ON players(user_id)"),
         d1.prepare("CREATE INDEX IF NOT EXISTS account_sessions_user_idx ON account_sessions(user_id)"),
         d1.prepare("CREATE INDEX IF NOT EXISTS scores_room_idx ON scores(room_id)"),
+        d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS friendships_pair_unique ON friendships(pair_key)"),
+        d1.prepare("CREATE INDEX IF NOT EXISTS friendships_requester_idx ON friendships(requester_id)"),
+        d1.prepare("CREATE INDEX IF NOT EXISTS friendships_addressee_idx ON friendships(addressee_id)"),
+        d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS room_invites_room_to_unique ON room_invites(room_id, to_user_id)"),
+        d1.prepare("CREATE INDEX IF NOT EXISTS room_invites_to_idx ON room_invites(to_user_id)"),
       ])
       .then(() => undefined)
       .catch((error: unknown) => {

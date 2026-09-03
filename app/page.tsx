@@ -81,6 +81,38 @@ type AccountProfile = {
   games: HistoryGame[];
 };
 
+type FriendSummary = {
+  friendshipId: string;
+  userId: string;
+  username: string;
+  displayName: string;
+  games: number;
+  together: number;
+};
+
+type FriendRequest = {
+  friendshipId: string;
+  userId: string;
+  username: string;
+  displayName: string;
+  createdAt: string;
+};
+
+type RoomInvite = {
+  id: string;
+  code: string;
+  from: string;
+  players: number;
+  createdAt: string;
+};
+
+type FriendsPayload = {
+  friends: FriendSummary[];
+  incoming: FriendRequest[];
+  outgoing: FriendRequest[];
+  invites: RoomInvite[];
+};
+
 /**
  * A die in flight. The rolled value arrives partway through as `spec.target`,
  * which is what starts the hand-off onto the landing face; `reduced` is the
@@ -94,6 +126,12 @@ const SESSION_KEY = "yazy-club-sessions";
 const ACTIVE_SESSION_PREFIX = "yazy-club-active-player";
 const EMPTY_SCORE_SUMMARY = { upper: 0, bonus: 0, lower: 0, total: 0 };
 const NO_DICE_IN_FLIGHT = [false, false, false, false, false];
+const NO_FRIENDS: FriendsPayload = {
+  friends: [],
+  incoming: [],
+  outgoing: [],
+  invites: [],
+};
 /**
  * The face a die is thrown with when there is nothing on the table to preserve
  * — the first roll of a turn. Shared between the throw and the sprite's first
@@ -373,6 +411,14 @@ export default function Home() {
   const [account, setAccount] = useState<AccountUser | null>(null);
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [accountPanelOpen, setAccountPanelOpen] = useState(false);
+  const [profileTab, setProfileTab] = useState<"profile" | "friends">("profile");
+  const [friends, setFriends] = useState<FriendsPayload>(NO_FRIENDS);
+  const [friendUsername, setFriendUsername] = useState("");
+  const [friendBusy, setFriendBusy] = useState(false);
+  const [friendError, setFriendError] = useState("");
+  const [friendNote, setFriendNote] = useState("");
+  /** Friends already asked to this table, so the button can say so. */
+  const [invitedIds, setInvitedIds] = useState<string[]>([]);
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [authUsername, setAuthUsername] = useState("");
@@ -724,11 +770,21 @@ export default function Home() {
     ],
   );
 
+  const loadFriends = useCallback(async () => {
+    const response = await fetch("/api/friends", { cache: "no-store" });
+    if (!response.ok) {
+      setFriends(NO_FRIENDS);
+      return;
+    }
+    setFriends((await response.json()) as FriendsPayload);
+  }, []);
+
   const refreshProfile = useCallback(async () => {
     const response = await fetch("/api/profile", { cache: "no-store" });
     if (!response.ok) {
       setAccount(null);
       setProfile(null);
+      setFriends(NO_FRIENDS);
       return false;
     }
     const next = (await response.json()) as AccountProfile;
@@ -737,8 +793,9 @@ export default function Home() {
     setName(next.user.displayName);
     setProfileName(next.user.displayName);
     setHistory(next.games ?? []);
+    void loadFriends();
     return true;
-  }, []);
+  }, [loadFriends]);
 
   // Always re-reads localStorage rather than closing over a snapshot, so a
   // game finished during this visit is included.
@@ -854,6 +911,25 @@ export default function Home() {
       void refreshHistory();
     });
   }, [fetchRoom, refreshHistory]);
+
+  /**
+   * Keep an eye out for friends opening a table.
+   *
+   * Only on the landing page: someone already sitting at a table is not going
+   * to walk to another one, and the room poll is busy enough as it is.
+   */
+  useEffect(() => {
+    if (!account || session) return;
+    const check = () => {
+      if (document.visibilityState === "visible") void loadFriends();
+    };
+    const timer = window.setInterval(check, 20_000);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [account, loadFriends, session]);
 
   useEffect(() => {
     if (!session) return;
@@ -977,19 +1053,22 @@ export default function Home() {
     [scoreSummaries, state],
   );
 
-  async function enterRoom(kind: "create" | "join") {
+  // `inviteCode` is for tables arrived at from a friend's invitation, where
+  // the code was never typed into the join field.
+  async function enterRoom(kind: "create" | "join", inviteCode?: string) {
     setError("");
+    const code = inviteCode ?? joinCode;
     if (!name.trim()) {
       setError("先取一個玩家名稱吧。");
       return;
     }
-    if (kind === "join" && joinCode.length !== 6) {
+    if (kind === "join" && code.length !== 6) {
       setError("房間代碼是 6 碼。");
       return;
     }
     setBusy(true);
     try {
-      const url = kind === "create" ? "/api/rooms" : `/api/rooms/${joinCode}/join`;
+      const url = kind === "create" ? "/api/rooms" : `/api/rooms/${code}/join`;
       const response = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1083,6 +1162,107 @@ export default function Home() {
     }
   }
 
+  async function addFriend() {
+    if (friendUsername.length < 3) return;
+    setFriendBusy(true);
+    setFriendError("");
+    setFriendNote("");
+    try {
+      const response = await fetch("/api/friends", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: friendUsername }),
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        status?: string;
+        displayName?: string;
+      };
+      if (!response.ok) {
+        setFriendError(data.error ?? "送不出去，請再試一次。");
+        return;
+      }
+      setFriendUsername("");
+      setFriendNote(
+        data.status === "accepted"
+          ? `${data.displayName} 也剛好加過你，你們現在是好友了。`
+          : `邀請送給 ${data.displayName} 了，等對方點頭。`,
+      );
+      await loadFriends();
+    } catch {
+      setFriendError("連線失敗，請再試一次。");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  /**
+   * Answer or undo a friendship.
+   *
+   * Declining, taking back a request and removing a friend all come down to
+   * dropping the same row, so they share one call.
+   */
+  async function respondToFriend(friendshipId: string, accept: boolean) {
+    setFriendBusy(true);
+    setFriendError("");
+    setFriendNote("");
+    try {
+      const response = await fetch(`/api/friends/${friendshipId}`, {
+        method: accept ? "PATCH" : "DELETE",
+      });
+      if (!response.ok) {
+        const data = (await response.json()) as { error?: string };
+        setFriendError(data.error ?? "沒能完成，請再試一次。");
+      }
+      await loadFriends();
+    } catch {
+      setFriendError("連線失敗，請再試一次。");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  async function inviteFriend(userId: string) {
+    if (!state) return;
+    setFriendBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/invites", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: state.room.code, userId }),
+      });
+      if (!response.ok) {
+        const data = (await response.json()) as { error?: string };
+        setError(data.error ?? "邀請沒送出去，請再試一次。");
+        return;
+      }
+      setInvitedIds((current) =>
+        current.includes(userId) ? current : [...current, userId],
+      );
+    } catch {
+      setError("連線失敗，請再試一次。");
+    } finally {
+      setFriendBusy(false);
+    }
+  }
+
+  async function dismissInvite(id: string) {
+    setFriends((current) => ({
+      ...current,
+      invites: current.invites.filter((invite) => invite.id !== id),
+    }));
+    try {
+      await fetch("/api/invites", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    } finally {
+      await loadFriends();
+    }
+  }
+
   async function logoutAccount() {
     setAccountBusy(true);
     setAccountError("");
@@ -1090,6 +1270,7 @@ export default function Home() {
       await fetch("/api/auth/logout", { method: "POST" });
       setAccount(null);
       setProfile(null);
+      setFriends(NO_FRIENDS);
       setAccountPanelOpen(false);
       setHistory([]);
       setHistoryLoaded(true);
@@ -1332,6 +1513,7 @@ export default function Home() {
   }
 
   function leaveRoom() {
+    setInvitedIds([]);
     if (session) {
       sessionStorage.removeItem(`${ACTIVE_SESSION_PREFIX}:${session.code}`);
     }
@@ -1363,6 +1545,15 @@ export default function Home() {
     await navigator.clipboard.writeText(url);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1800);
+  }
+
+  // Requests and invitations arrive while the panel is shut, so it opens onto
+  // a fresh read rather than whatever the last visit left behind.
+  function openAccountPanel() {
+    setAccountPanelOpen(true);
+    setFriendError("");
+    setFriendNote("");
+    if (account) void loadFriends();
   }
 
   function toggleSound() {
@@ -1402,42 +1593,187 @@ export default function Home() {
                 <small>@{account.username}</small>
               </div>
             </div>
-            <div className="profile-stats">
-              <article><strong>{profile.stats.games}</strong><span>完成場次</span></article>
-              <article><strong>{profile.stats.wins}</strong><span>勝場</span></article>
-              <article><strong>{profile.stats.bestScore}</strong><span>最高分</span></article>
-              <article><strong>{profile.stats.averageScore}</strong><span>平均分</span></article>
-            </div>
-            <label className="profile-field">
-              <span>你想用什麼名字</span>
-              <input
-                maxLength={18}
-                onChange={(event) => setProfileName(event.target.value)}
-                value={profileName}
-              />
-            </label>
-            {accountError && <p className="form-error">{accountError}</p>}
-            <div className="profile-actions">
+            <div className="auth-tabs">
               <button
-                className="primary-action"
-                disabled={accountBusy || profileName.trim() === account.displayName}
-                onClick={saveProfile}
+                className={profileTab === "profile" ? "active" : ""}
+                onClick={() => setProfileTab("profile")}
+                type="button"
+              >個人資料</button>
+              <button
+                className={profileTab === "friends" ? "active" : ""}
+                onClick={() => setProfileTab("friends")}
                 type="button"
               >
-                儲存個人資料
-              </button>
-              <button
-                className="text-action"
-                disabled={accountBusy}
-                onClick={logoutAccount}
-                type="button"
-              >
-                登出
+                好友
+                {friends.incoming.length > 0 && (
+                  <b className="tab-badge">{friends.incoming.length}</b>
+                )}
               </button>
             </div>
-            <p className="profile-since">
-              加入日期：{new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium" }).format(new Date(account.createdAt))}
-            </p>
+            {profileTab === "profile" ? (
+              <>
+                <div className="profile-stats">
+                  <article><strong>{profile.stats.games}</strong><span>完成場次</span></article>
+                  <article><strong>{profile.stats.wins}</strong><span>勝場</span></article>
+                  <article><strong>{profile.stats.bestScore}</strong><span>最高分</span></article>
+                  <article><strong>{profile.stats.averageScore}</strong><span>平均分</span></article>
+                </div>
+                <label className="profile-field">
+                  <span>你想用什麼名字</span>
+                  <input
+                    maxLength={18}
+                    onChange={(event) => setProfileName(event.target.value)}
+                    value={profileName}
+                  />
+                </label>
+                {accountError && <p className="form-error">{accountError}</p>}
+                <div className="profile-actions">
+                  <button
+                    className="primary-action"
+                    disabled={accountBusy || profileName.trim() === account.displayName}
+                    onClick={saveProfile}
+                    type="button"
+                  >
+                    儲存個人資料
+                  </button>
+                  <button
+                    className="text-action"
+                    disabled={accountBusy}
+                    onClick={logoutAccount}
+                    type="button"
+                  >
+                    登出
+                  </button>
+                </div>
+                <p className="profile-since">
+                  加入日期：{new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium" }).format(new Date(account.createdAt))}
+                </p>
+              </>
+            ) : (
+              <div className="friends-block">
+                <div className="friend-add">
+                  <label>
+                    <span>用帳號加好友</span>
+                    <input
+                      autoCapitalize="none"
+                      maxLength={20}
+                      onChange={(event) =>
+                        setFriendUsername(
+                          event.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""),
+                        )
+                      }
+                      placeholder="對方的帳號"
+                      value={friendUsername}
+                    />
+                  </label>
+                  <button
+                    className="primary-action"
+                    disabled={friendBusy || friendUsername.length < 3}
+                    onClick={addFriend}
+                    type="button"
+                  >
+                    {friendBusy ? "請稍候…" : "送出邀請"}
+                  </button>
+                </div>
+                {friendError && <p className="form-error">{friendError}</p>}
+                {friendNote && <p className="friend-note">{friendNote}</p>}
+
+                {friends.incoming.length > 0 && (
+                  <div className="friend-group">
+                    <h3>等你回覆</h3>
+                    {friends.incoming.map((person) => (
+                      <article className="friend-row" key={person.friendshipId}>
+                        <span className="avatar">
+                          {person.displayName.slice(0, 1).toUpperCase()}
+                        </span>
+                        <div className="friend-copy">
+                          <strong>{person.displayName}</strong>
+                          <small>@{person.username}</small>
+                        </div>
+                        <div className="friend-actions">
+                          <button
+                            className="friend-yes"
+                            disabled={friendBusy}
+                            onClick={() => respondToFriend(person.friendshipId, true)}
+                            type="button"
+                          >
+                            接受
+                          </button>
+                          <button
+                            className="friend-no"
+                            disabled={friendBusy}
+                            onClick={() => respondToFriend(person.friendshipId, false)}
+                            type="button"
+                          >
+                            不用了
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+
+                <div className="friend-group">
+                  <h3>好友{friends.friends.length > 0 ? ` ${friends.friends.length}` : ""}</h3>
+                  {friends.friends.length === 0 ? (
+                    <p className="friend-empty">
+                      還沒有人。把你的帳號 @{account.username} 給對方，或直接加對方的帳號。
+                    </p>
+                  ) : (
+                    friends.friends.map((friend) => (
+                      <article className="friend-row" key={friend.friendshipId}>
+                        <span className="avatar">
+                          {friend.displayName.slice(0, 1).toUpperCase()}
+                        </span>
+                        <div className="friend-copy">
+                          <strong>{friend.displayName}</strong>
+                          <small>
+                            {friend.games} 場 · 一起玩過 {friend.together} 場
+                          </small>
+                        </div>
+                        <div className="friend-actions">
+                          <button
+                            className="friend-no"
+                            disabled={friendBusy}
+                            onClick={() => respondToFriend(friend.friendshipId, false)}
+                            type="button"
+                          >
+                            移除
+                          </button>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+
+                {friends.outgoing.length > 0 && (
+                  <div className="friend-group">
+                    <h3>等對方回覆</h3>
+                    {friends.outgoing.map((person) => (
+                      <article className="friend-row" key={person.friendshipId}>
+                        <span className="avatar">
+                          {person.displayName.slice(0, 1).toUpperCase()}
+                        </span>
+                        <div className="friend-copy">
+                          <strong>{person.displayName}</strong>
+                          <small>@{person.username}</small>
+                        </div>
+                        <div className="friend-actions">
+                          <button
+                            className="friend-no"
+                            disabled={friendBusy}
+                            onClick={() => respondToFriend(person.friendshipId, false)}
+                            type="button"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -1665,7 +2001,7 @@ export default function Home() {
             <button
               aria-label={account ? account.displayName : "登入"}
               className="account-trigger compact"
-              onClick={() => setAccountPanelOpen(true)}
+              onClick={openAccountPanel}
               type="button"
             >
               <span>{(account?.displayName ?? me?.name ?? "人").slice(0, 1).toUpperCase()}</span>
@@ -1700,6 +2036,40 @@ export default function Home() {
                 <span>還有位子</span>
               </div>
             </div>
+            {account && friends.friends.length > 0 && (
+              <div className="invite-friends">
+                <h2>叫好友過來</h2>
+                <div className="invite-friend-list">
+                  {friends.friends.map((friend) => {
+                    // 房間狀態只帶名字，而登入的人上桌用的就是顯示名稱，
+                    // 所以名字對得上就當他已經在桌上。真正的把關在伺服器。
+                    const seated = state.players.some(
+                      (player) => player.name === friend.displayName,
+                    );
+                    const invited = invitedIds.includes(friend.userId);
+                    return (
+                      <article className="friend-row" key={friend.friendshipId}>
+                        <span className="avatar">
+                          {friend.displayName.slice(0, 1).toUpperCase()}
+                        </span>
+                        <div className="friend-copy">
+                          <strong>{friend.displayName}</strong>
+                          <small>@{friend.username}</small>
+                        </div>
+                        <button
+                          className="friend-invite"
+                          disabled={seated || invited || friendBusy}
+                          onClick={() => inviteFriend(friend.userId)}
+                          type="button"
+                        >
+                          {seated ? "在桌上" : invited ? "已邀請" : "邀請"}
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {state.room.hostPlayerId === session.playerId ? (
               <button
                 className="primary-action"
@@ -1917,7 +2287,7 @@ export default function Home() {
           <span>yazy</span>
         </div>
         <div className="nav-actions">
-          <button className="account-trigger" onClick={() => setAccountPanelOpen(true)} type="button">
+          <button className="account-trigger" onClick={openAccountPanel} type="button">
             <span>{account?.displayName.slice(0, 1).toUpperCase() ?? "人"}</span>
             {account ? account.displayName : "登入"}
           </button>
@@ -2030,6 +2400,41 @@ export default function Home() {
         </div>
 
       </section>
+
+      {friends.invites.length > 0 && (
+        <section className="invite-section">
+          <h2>好友找你上桌</h2>
+          <div className="invite-list">
+            {friends.invites.map((invite) => (
+              <article key={invite.id}>
+                <div className="invite-copy">
+                  <strong>{invite.from} 開了一桌</strong>
+                  <small>
+                    {invite.code} · {invite.players} 人在等
+                  </small>
+                </div>
+                <div className="invite-actions">
+                  <button
+                    className="primary-action"
+                    disabled={busy}
+                    onClick={() => void enterRoom("join", invite.code)}
+                    type="button"
+                  >
+                    {busy ? "正在過去…" : "進去"}
+                  </button>
+                  <button
+                    className="text-action"
+                    onClick={() => void dismissInvite(invite.id)}
+                    type="button"
+                  >
+                    這次不了
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="history-section">
         <h2>上次的桌</h2>

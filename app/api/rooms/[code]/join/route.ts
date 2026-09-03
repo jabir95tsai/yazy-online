@@ -93,6 +93,15 @@ export async function POST(
       );
     }
 
+    if (account) {
+      // The invitation has served its purpose; leaving it would keep offering
+      // this table on the landing page of someone already sitting at it.
+      await d1
+        .prepare("DELETE FROM room_invites WHERE room_id = ? AND to_user_id = ?")
+        .bind(room.id, account.id)
+        .run();
+    }
+
     return Response.json({ code, playerId, token }, { status: 201 });
   } catch (error) {
     return apiError(error);
