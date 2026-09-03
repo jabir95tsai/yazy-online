@@ -116,7 +116,6 @@ export async function getRoomState(code: string, ifNoneMatch?: string | null) {
         id: room.id,
         code: room.code,
         status: room.status,
-        maxPlayers: room.maxPlayers,
         hostPlayerId: room.hostPlayerId,
         currentSeat: room.currentSeat,
         round: room.round,

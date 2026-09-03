@@ -21,10 +21,9 @@ export async function POST(request: Request) {
       );
     }
     await ensureSchema();
-    const body = (await request.json()) as { name?: string; maxPlayers?: number };
+    const body = (await request.json()) as { name?: string };
     const account = await getCurrentUser(request);
     const name = account?.displayName ?? cleanName(body.name);
-    const maxPlayers = Math.min(6, Math.max(2, Number(body.maxPlayers) || 6));
     if (!name) {
       return Response.json({ error: "先取一個玩家名稱吧。" }, { status: 400 });
     }
@@ -46,7 +45,6 @@ export async function POST(request: Request) {
       db.insert(rooms).values({
         id: roomId,
         code,
-        maxPlayers,
         hostPlayerId: playerId,
         createdAt: now,
         updatedAt: now,

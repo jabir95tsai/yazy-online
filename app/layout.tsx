@@ -1,15 +1,10 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
   subsets: ["latin"],
 });
 
@@ -20,28 +15,28 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol =
     incoming.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const title = "YAZY CLUB｜線上骰子派對";
+  const title = "yazy battle!";
   const description =
-    "揪 2–6 位朋友，用房間代碼立即開局。輪流擲骰、鎖定組合，寫下今晚最高分。";
+    "開一桌，把六位代碼給朋友。沒有計時、沒有輸贏壓力，想聊多久就聊多久。";
 
   return {
     metadataBase: new URL(origin),
     title: {
       default: title,
-      template: "%s｜YAZY CLUB",
+      template: "%s｜yazy",
     },
     description,
     openGraph: {
-      title: "YAZY CLUB｜今晚，擲出你的傳說",
-      description: "2–6 人線上骰子派對，用代碼加入房間。",
+      title: "yazy battle!",
+      description: "開一桌，把代碼給朋友。慢慢玩就好。",
       type: "website",
       url: origin,
       images: [`${origin}/og.png`],
     },
     twitter: {
       card: "summary_large_image",
-      title: "YAZY CLUB｜今晚，擲出你的傳說",
-      description: "2–6 人線上骰子派對，用代碼加入房間。",
+      title: "yazy battle!",
+      description: "開一桌，把代碼給朋友。慢慢玩就好。",
       images: [`${origin}/og.png`],
     },
   };
@@ -55,7 +50,7 @@ export default function RootLayout({
   return (
     <html lang="zh-Hant">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} antialiased`}
       >
         {children}
       </body>

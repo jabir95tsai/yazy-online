@@ -1,6 +1,6 @@
 # YAZY CLUB
 
-一個支援 2–6 人的線上 Yahtzee 風格骰子遊戲。玩家可以建立房間、
+一個人數不限的線上 Yahtzee 風格骰子遊戲。玩家可以建立房間、
 用 6 碼代碼邀請朋友、輪流擲骰與計分，完成的對局會保存在 D1。
 
 正式網站：<https://yazy-online.jabir95tsai.workers.dev>

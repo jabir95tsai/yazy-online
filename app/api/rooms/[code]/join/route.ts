@@ -36,9 +36,6 @@ export async function POST(
       .from(players)
       .where(eq(players.roomId, room.id))
       .orderBy(asc(players.seat));
-    if (roomPlayers.length >= room.maxPlayers) {
-      return Response.json({ error: "房間已經滿員。" }, { status: 409 });
-    }
     if (account && roomPlayers.some((player) => player.userId === account.id)) {
       return Response.json({ error: "你的帳號已經加入這個房間。" }, { status: 409 });
     }
@@ -60,7 +57,6 @@ export async function POST(
           ?, ?
         FROM rooms
         WHERE id = ? AND status = 'waiting'
-          AND (SELECT COUNT(*) FROM players WHERE room_id = rooms.id) < max_players
           AND (? IS NULL OR NOT EXISTS (
             SELECT 1 FROM players WHERE room_id = rooms.id AND user_id = ?
           ))
