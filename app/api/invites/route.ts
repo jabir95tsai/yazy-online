@@ -2,8 +2,18 @@ import { eq } from "drizzle-orm";
 import { ensureSchema, getDb } from "@/db";
 import { players, roomInvites, rooms } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
-import { findAcceptedFriendship } from "@/lib/friends";
+import { findAcceptedFriendship, loadInvites } from "@/lib/friends";
 import { apiError, cleanCode } from "@/lib/server";
+
+export async function GET(request: Request) {
+  try {
+    const user = await getCurrentUser(request);
+    if (!user) return Response.json({ error: "尚未登入。" }, { status: 401 });
+    return Response.json({ invites: await loadInvites(user.id) }, {
+      headers: { "cache-control": "private, no-store" },
+    });
+  } catch (error) { return apiError(error); }
+}
 
 /** Ask a friend to a table you are sitting at. */
 export async function POST(request: Request) {

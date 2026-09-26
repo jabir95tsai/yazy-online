@@ -119,7 +119,12 @@ export function ensureSchema() {
         d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS room_invites_room_to_unique ON room_invites(room_id, to_user_id)"),
         d1.prepare("CREATE INDEX IF NOT EXISTS room_invites_to_idx ON room_invites(to_user_id)"),
       ])
-      .then(() => undefined)
+      .then(async () => {
+        const columns = await d1.prepare("PRAGMA table_info(players)").all<{ name: string }>();
+        if (!columns.results.some((column) => column.name === "surrender_reason")) {
+          await d1.prepare("ALTER TABLE players ADD COLUMN surrender_reason TEXT").run();
+        }
+      })
       .catch((error: unknown) => {
         schemaReady = null;
         throw error;

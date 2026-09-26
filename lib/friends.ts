@@ -1,7 +1,9 @@
 import { and, countDistinct, desc, eq, inArray, or } from "drizzle-orm";
-import { alias } from "drizzle-orm/sqlite-core";
 import { getDb } from "@/db";
 import { friendships, players, roomInvites, rooms, users } from "@/db/schema";
+import { loadUserHistory } from "@/lib/history";
+import { versusRecords, type VersusRecord } from "@/lib/stats";
+import { idsIn } from "./query.ts";
 
 /** How many friend requests one account may have waiting for an answer. */
 export const MAX_PENDING_REQUESTS = 50;
@@ -15,8 +17,8 @@ export type FriendSummary = {
   displayName: string;
   /** Finished games on this friend's account. */
   games: number;
-  /** Finished games the two of you were both at. */
-  together: number;
+  /** The two of you head to head. Null until you have shared a table. */
+  record: VersusRecord | null;
 };
 
 export type FriendRequest = {
@@ -59,29 +61,23 @@ async function countFinishedGames(userIds: string[]) {
     .select({ userId: players.userId, games: countDistinct(players.roomId) })
     .from(players)
     .innerJoin(rooms, eq(rooms.id, players.roomId))
-    .where(and(inArray(players.userId, userIds), eq(rooms.status, "finished")))
+    .where(and(idsIn(players.userId, userIds), eq(rooms.status, "finished")))
     .groupBy(players.userId);
   return new Map(rows.map((row) => [row.userId ?? "", row.games]));
 }
 
-/** Finished games each of those accounts played at the same table as `userId`. */
-async function countSharedGames(userId: string, userIds: string[]) {
-  if (!userIds.length) return new Map<string, number>();
-  const mine = alias(players, "mine");
-  const rows = await getDb()
-    .select({ userId: players.userId, together: countDistinct(players.roomId) })
-    .from(players)
-    .innerJoin(mine, eq(mine.roomId, players.roomId))
-    .innerJoin(rooms, eq(rooms.id, players.roomId))
-    .where(
-      and(
-        eq(mine.userId, userId),
-        inArray(players.userId, userIds),
-        eq(rooms.status, "finished"),
-      ),
-    )
-    .groupBy(players.userId);
-  return new Map(rows.map((row) => [row.userId ?? "", row.together]));
+/**
+ * How `userId` has done against each of those accounts, head to head.
+ *
+ * This reads the whole run of finished games once and splits it per opponent,
+ * rather than asking the database a question per friend — the same rows answer
+ * every friend's record, and the win rate on the record tab besides.
+ */
+async function loadVersus(userId: string, userIds: string[]) {
+  if (!userIds.length) return new Map<string, VersusRecord>();
+  const wanted = new Set(userIds);
+  const records = versusRecords(await loadUserHistory(userId), userId);
+  return new Map([...records].filter(([id]) => wanted.has(id)));
 }
 
 /**
@@ -92,7 +88,7 @@ async function countSharedGames(userId: string, userIds: string[]) {
  * dropped later by the scheduled cleanup rather than at read time, so a read
  * stays a read.
  */
-async function loadInvites(userId: string): Promise<RoomInviteSummary[]> {
+export async function loadInvites(userId: string): Promise<RoomInviteSummary[]> {
   const db = getDb();
   const rows = await db
     .select({
@@ -148,13 +144,13 @@ export async function loadFriendsPayload(userId: string): Promise<FriendsPayload
   const otherId = (link: typeof links[number]) =>
     link.requesterId === userId ? link.addresseeId : link.requesterId;
   const accepted = links.filter((link) => link.status === "accepted");
-  const [people, games, together] = await Promise.all([
+  const [people, games, versus] = await Promise.all([
     db
       .select({ id: users.id, username: users.username, displayName: users.displayName })
       .from(users)
-      .where(inArray(users.id, links.map(otherId))),
+      .where(idsIn(users.id, links.map(otherId))),
     countFinishedGames(accepted.map(otherId)),
-    countSharedGames(userId, accepted.map(otherId)),
+    loadVersus(userId, accepted.map(otherId)),
   ]);
   const byId = new Map(people.map((person) => [person.id, person]));
 
@@ -174,7 +170,7 @@ export async function loadFriendsPayload(userId: string): Promise<FriendsPayload
       friends.push({
         ...base,
         games: games.get(person.id) ?? 0,
-        together: together.get(person.id) ?? 0,
+        record: versus.get(person.id) ?? null,
       });
     } else if (link.addresseeId === userId) {
       incoming.push({ ...base, createdAt: link.createdAt });

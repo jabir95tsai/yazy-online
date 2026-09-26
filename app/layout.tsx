@@ -26,6 +26,9 @@ export async function generateMetadata(): Promise<Metadata> {
       template: "%s｜yazy",
     },
     description,
+    icons: {
+      icon: "/favicon.svg",
+    },
     openGraph: {
       title: "yazy battle!",
       description: "開一桌，把代碼給朋友。慢慢玩就好。",

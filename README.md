@@ -19,11 +19,28 @@ npm run dev
 ```bash
 npm test
 npm run lint
+npm run typecheck
 npm run build
 ```
 
 資料表定義位於 `db/schema.ts`，修改後使用 `npm run db:generate`
 建立新的 Drizzle migration。
+
+`tests/browser-regression.mjs` 另外驗證本機 Worker/D1 完整對局、帳號戰績、
+鎖骰失敗與重試、跨分頁鎖骰同步、延遲輪詢、對話框焦點及手機排版。
+先啟動本機伺服器，再於已提供 Playwright 與 Chrome 的環境執行：
+
+```bash
+node tests/browser-regression.mjs
+```
+
+預設測試位址為 `http://localhost:3100`，可用 `TEST_ORIGIN` 指定其他本機連接埠。
+`PLAYWRIGHT_MODULE` 可指定外部 Playwright 的 `index.mjs` 絕對路徑。
+測試會建立本機測試帳號與對局，拒絕對正式網址執行，截圖寫入忽略的 `outputs/`。
+
+帳號統計與好友對戰紀錄採最近 200 場已完成對局，列表顯示最近 20 場。
+首頁背景更新只查詢房間邀請；開啟帳號面板時重新讀取好友戰績。
+大量 ID 查詢透過單一 JSON 參數及 SQLite `json_each`，避免超過 D1 的參數上限。
 
 ## 目錄結構
 
@@ -105,3 +122,12 @@ Cloudflare 每天 03:17（台北時間）執行排程清理：
   在有人打完才會變成 `finished`，否則會永遠留著。
 
 **已完成的對局永遠保留**，帳號歷史戰績即是由此而來。
+
+## 投降與挑戰紀錄
+
+- 進行中的玩家可按「投降」並確認；不必等自己的回合。投降後保留已得分數、未填格保持空白，並跳過其後續回合。
+- 每次計分、逾時計分或手動投降後，伺服器以剩餘格子的理論最高分（含仍可取得的 35 分加成）判定是否自動投降。只有最高分嚴格低於其他未投降玩家的現有分數才觸發；仍能追平者繼續。已填滿的計分卡保留正常結果。
+- 最後一位未投降玩家可按「立即結算」，或繼續擲骰填滿 13 格挑戰紀錄。投降玩家可留在房間觀看；單人延續仍適用原本的 90 秒回合規則。
+- 勝負、名次與對戰統計優先考慮投降狀態，投降者不會因分數較高而獲勝；多位投降者並列在未投降者之後。最高分與平均分仍使用實際所得分數。
+- 上線前需套用 `drizzle/0006_surrender.sql`；舊玩家的 `surrender_reason` 預設為 `NULL`，不影響既有完成對局。
+- 本機端到端驗證：啟動開發伺服器後執行 `node tests/surrender-regression.mjs`。可用 `PLAYWRIGHT_MODULE` 指定 Playwright；預設只連 `http://localhost:3100`。測試會建立合成對局，並在本機 D1 為該合成對局建立分數情境。

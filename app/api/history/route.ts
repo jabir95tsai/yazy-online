@@ -23,12 +23,18 @@ export async function POST(request: Request) {
     const expected = new Map(
       valid.map((session, index) => [session.playerId, hashes[index]]),
     );
-    const roomIds = playerRows
-      .filter((player) => player.tokenHash === expected.get(player.id))
-      .map((player) => player.roomId);
-
-    const uniqueRoomIds = [...new Set(roomIds)];
-    return Response.json({ games: await loadFinishedGames(uniqueRoomIds) });
+    const seats = playerRows.filter(
+      (player) => player.tokenHash === expected.get(player.id),
+    );
+    const uniqueRoomIds = [...new Set(seats.map((player) => player.roomId))];
+    // The seats are handed back in so a guest's own line is marked, which is
+    // what the score summary on the landing page counts.
+    return Response.json({
+      games: await loadFinishedGames(
+        uniqueRoomIds,
+        seats.map((player) => player.id),
+      ),
+    });
   } catch (error) {
     return apiError(error);
   }

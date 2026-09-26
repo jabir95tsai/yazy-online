@@ -77,11 +77,13 @@ export async function POST(
       );
     const touchRoom = d1
       .prepare(`
-        UPDATE rooms SET updated_at = ?
+        UPDATE rooms SET updated_at = CASE WHEN updated_at >= ?
+          THEN strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds')
+          ELSE ? END
         WHERE id = ? AND status = 'waiting'
           AND EXISTS (SELECT 1 FROM players WHERE id = ? AND room_id = rooms.id)
       `)
-      .bind(now, room.id, playerId);
+      .bind(now, now, room.id, playerId);
     const [insertResult, updateResult] = await d1.batch([insert, touchRoom]);
     if (insertResult.meta.changes !== 1 || updateResult.meta.changes !== 1) {
       if (insertResult.meta.changes === 1) {

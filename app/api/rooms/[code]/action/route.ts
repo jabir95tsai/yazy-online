@@ -1,11 +1,12 @@
-import { and, asc, count, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { ensureSchema, getD1, getDb } from "@/db";
 import { players, rooms, scores } from "@/db/schema";
 import { categoryIds, fairDieFromByte, scoreDice, type CategoryId } from "@/lib/game";
+import { resolveMatch, type MatchPlayer, type MatchScore } from "@/lib/match";
 import { apiError, cleanCode, hashToken } from "@/lib/server";
 
 type ActionBody = {
-  action?: "start" | "roll" | "hold" | "score" | "skip";
+  action?: "start" | "roll" | "hold" | "score" | "skip" | "surrender" | "finish";
   playerId?: string;
   token?: string;
   held?: boolean[];
@@ -35,13 +36,6 @@ function turnDeadline() {
   return new Date(Date.now() + TURN_MS).toISOString();
 }
 
-function scoreMarker() {
-  const suffix = new Uint32Array(1);
-  crypto.getRandomValues(suffix);
-  const fractionalSuffix = suffix[0].toString().padStart(10, "0").slice(-6);
-  return `${new Date().toISOString().slice(0, -1)}${fractionalSuffix}Z`;
-}
-
 function secureEqual(left: string, right: string) {
   if (left.length !== right.length) return false;
   let difference = 0;
@@ -60,128 +54,40 @@ function rollDie() {
   }
 }
 
-function nextRoomState(room: RoomRow, playerCount: number, totalScoresAfter: number) {
-  const complete = totalScoresAfter >= playerCount * categoryIds.length;
-  const nextSeat = (room.currentSeat + 1) % playerCount;
-  return {
-    complete,
-    nextSeat,
-    round: complete
-      ? categoryIds.length
-      : nextSeat === 0
-        ? Math.min(categoryIds.length, room.round + 1)
-        : room.round,
-  };
-}
-
-async function scoreAndAdvance(input: {
-  room: RoomRow;
-  playerId: string;
-  category: CategoryId;
-  value: number;
-  playerCount: number;
-  scoreCountBefore: number;
-}) {
-  const { room, playerId, category, value, playerCount, scoreCountBefore } = input;
+// One CAS-controlled transaction owns the room, scores and concession states.
+// The unique timestamp suffix prevents a losing concurrent request from writing.
+async function commitMatch(room: RoomRow, roomPlayers: MatchPlayer[], roomScores: MatchScore[],
+  options: { score?: MatchScore; surrender?: string; finish?: boolean; advance?: boolean }) {
+  const afterScores = options.score ? [...roomScores, options.score] : roomScores;
+  const next = resolveMatch(roomPlayers, afterScores, room.currentSeat, !!options.advance, options.surrender);
+  const complete = !!options.finish || next.complete;
+  const resetTurn = !!options.advance || next.nextSeat !== room.currentSeat || complete;
+  const suffix = Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString().padStart(10, "0")).join("");
+  const updatedAt = `${nextTimestamp(room.updatedAt).slice(0, -1)}${suffix}Z`;
   const d1 = getD1();
-  const marker = scoreMarker();
-  const updatedAt = nextTimestamp(room.updatedAt);
-  const next = nextRoomState(room, playerCount, scoreCountBefore + 1);
-  const deadline = next.complete ? null : turnDeadline();
-  const finishedAt = next.complete ? updatedAt : null;
-
-  const insert = d1
-    .prepare(`
-      INSERT OR IGNORE INTO scores (room_id, player_id, category, score, created_at)
-      SELECT ?, ?, ?, ?, ?
-      WHERE EXISTS (
-        SELECT 1 FROM rooms
-        WHERE id = ? AND status = 'playing'
-          AND current_seat = ? AND rolls_used = ? AND updated_at = ?
-      )
-    `)
-    .bind(
-      room.id,
-      playerId,
-      category,
-      value,
-      marker,
-      room.id,
-      room.currentSeat,
-      room.rollsUsed,
-      room.updatedAt,
-    );
-  const update = d1
-    .prepare(`
-      UPDATE rooms
-      SET status = ?, current_seat = ?, round = ?, dice_json = '[]',
-          held_json = ?, rolls_used = 0, updated_at = ?, finished_at = ?,
-          turn_deadline = ?
-      WHERE id = ? AND status = 'playing'
-        AND current_seat = ? AND rolls_used = ? AND updated_at = ?
-        AND EXISTS (
-          SELECT 1 FROM scores
-          WHERE room_id = ? AND player_id = ? AND category = ? AND created_at = ?
-        )
-    `)
-    .bind(
-      next.complete ? "finished" : "playing",
-      next.nextSeat,
-      next.round,
-      JSON.stringify(emptyHeld),
-      updatedAt,
-      finishedAt,
-      deadline,
-      room.id,
-      room.currentSeat,
-      room.rollsUsed,
-      room.updatedAt,
-      room.id,
-      playerId,
-      category,
-      marker,
-    );
-
-  const [insertResult, updateResult] = await d1.batch([insert, update]);
-  if (resultChanged(insertResult) && resultChanged(updateResult)) return next;
-
-  if (resultChanged(insertResult)) {
-    await d1
-      .prepare(
-        "DELETE FROM scores WHERE room_id = ? AND player_id = ? AND category = ? AND created_at = ?",
-      )
-      .bind(room.id, playerId, category, marker)
-      .run();
+  const statements = [d1.prepare(`
+    UPDATE rooms SET status = ?, current_seat = ?, round = ?, dice_json = ?,
+      held_json = ?, rolls_used = ?, updated_at = ?, finished_at = ?, turn_deadline = ?
+    WHERE id = ? AND status = 'playing' AND updated_at = ?
+  `).bind(complete ? "finished" : "playing", next.nextSeat, next.round,
+    resetTurn ? "[]" : room.diceJson, resetTurn ? JSON.stringify(emptyHeld) : room.heldJson,
+    resetTurn ? 0 : room.rollsUsed, updatedAt, complete ? updatedAt : null,
+    complete ? null : resetTurn ? turnDeadline() : room.turnDeadline, room.id, room.updatedAt)];
+  if (options.score) {
+    const score = options.score;
+    statements.push(d1.prepare(`INSERT INTO scores (room_id, player_id, category, score, created_at)
+      SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
+      .bind(room.id, score.playerId, score.category, score.score, updatedAt, room.id, updatedAt));
   }
-  return null;
-}
-
-async function advanceWithoutScore(room: RoomRow, playerCount: number, totalScores: number) {
-  const next = nextRoomState(room, playerCount, totalScores);
-  const updatedAt = nextTimestamp(room.updatedAt);
-  const result = await getDb()
-    .update(rooms)
-    .set({
-      status: next.complete ? "finished" : "playing",
-      currentSeat: next.nextSeat,
-      round: next.round,
-      diceJson: "[]",
-      heldJson: JSON.stringify(emptyHeld),
-      rollsUsed: 0,
-      updatedAt,
-      finishedAt: next.complete ? updatedAt : null,
-      turnDeadline: next.complete ? null : turnDeadline(),
-    })
-    .where(
-      and(
-        eq(rooms.id, room.id),
-        eq(rooms.status, "playing"),
-        eq(rooms.currentSeat, room.currentSeat),
-        eq(rooms.rollsUsed, room.rollsUsed),
-        eq(rooms.updatedAt, room.updatedAt),
-      ),
-    );
-  return resultChanged(result) ? next : null;
+  for (const player of next.players) {
+    if (player.surrenderReason !== roomPlayers.find((entry) => entry.id === player.id)?.surrenderReason) {
+      statements.push(d1.prepare(`UPDATE players SET surrender_reason = ? WHERE id = ? AND room_id = ?
+        AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
+        .bind(player.surrenderReason, player.id, room.id, room.id, updatedAt));
+    }
+  }
+  const [result] = await d1.batch(statements);
+  return resultChanged(result) ? { complete } : null;
 }
 
 export async function POST(
@@ -204,6 +110,7 @@ export async function POST(
           seat: players.seat,
           tokenHash: players.tokenHash,
           joinedAt: players.joinedAt,
+          surrenderReason: players.surrenderReason,
         })
         .from(players)
         .innerJoin(rooms, eq(players.roomId, rooms.id))
@@ -263,38 +170,47 @@ export async function POST(
       return Response.json({ error: "遊戲目前不在進行中。" }, { status: 409 });
     }
 
+    const roomScores = ["score", "skip", "surrender", "finish"].includes(body.action ?? "")
+      ? await db.select({ playerId: scores.playerId, category: scores.category, score: scores.score })
+        .from(scores).where(eq(scores.roomId, room.id))
+      : [];
+    const active = roomPlayers.filter((entry) => !entry.surrenderReason);
+    if (body.action === "surrender" || body.action === "finish") {
+      if (player.surrenderReason) {
+        return Response.json({ error: "你已投降，可觀看其他玩家繼續挑戰紀錄。" }, { status: 409 });
+      }
+      if (body.action === "finish" && (active.length !== 1 || active[0].id !== player.id)) {
+        return Response.json({ error: "只有最後一位未投降玩家可以提前結算。" }, { status: 403 });
+      }
+      if (body.action === "surrender" && active.length <= 1) {
+        return Response.json({ error: "你已獲勝，可以直接結算或繼續挑戰紀錄。" }, { status: 409 });
+      }
+      const next = await commitMatch(room, roomPlayers, roomScores, {
+        surrender: body.action === "surrender" ? player.id : undefined,
+        finish: body.action === "finish",
+      });
+      return next ? Response.json({ ok: true, ...next })
+        : Response.json({ error: "房間狀態已變更，請重試。" }, { status: 409 });
+    }
+
     if (body.action === "skip") {
       if (!room.turnDeadline || Date.now() < Date.parse(room.turnDeadline)) {
         return Response.json({ error: "目前回合還沒逾時。" }, { status: 409 });
       }
       const stalled = roomPlayers.find((candidate) => candidate.seat === room.currentSeat);
-      if (!stalled) {
-        return Response.json({ error: "找不到目前的玩家。" }, { status: 409 });
-      }
-      const [taken, scoreCountRows] = await db.batch([
-        db
-          .select({ category: scores.category })
-          .from(scores)
-          .where(and(eq(scores.roomId, room.id), eq(scores.playerId, stalled.id))),
-        db.select({ value: count() }).from(scores).where(eq(scores.roomId, room.id)),
-      ]);
-      const used = new Set(taken.map((entry) => entry.category));
+      if (!stalled) return Response.json({ error: "找不到目前的玩家。" }, { status: 409 });
+      const used = new Set(roomScores.filter((score) => score.playerId === stalled.id).map((score) => score.category));
       const free = categoryIds.find((category) => !used.has(category));
-      const scoreCountBefore = scoreCountRows[0]?.value ?? 0;
-      const next = free
-        ? await scoreAndAdvance({
-            room,
-            playerId: stalled.id,
-            category: free,
-            value: 0,
-            playerCount: roomPlayers.length,
-            scoreCountBefore,
-          })
-        : await advanceWithoutScore(room, roomPlayers.length, scoreCountBefore);
-      if (!next) {
-        return Response.json({ error: "回合已經變更，請重新整理。" }, { status: 409 });
-      }
-      return Response.json({ ok: true, skippedPlayer: stalled.name, complete: next.complete });
+      const next = await commitMatch(room, roomPlayers, roomScores, {
+        score: free && !stalled.surrenderReason ? { playerId: stalled.id, category: free, score: 0 } : undefined,
+        advance: true,
+      });
+      return next ? Response.json({ ok: true, skippedPlayer: stalled.name, ...next })
+        : Response.json({ error: "回合已經變更，請重新整理。" }, { status: 409 });
+    }
+
+    if (player.surrenderReason) {
+      return Response.json({ error: "投降後無法再擲骰或計分。" }, { status: 403 });
     }
 
     if (player.seat !== room.currentSeat) {
@@ -368,18 +284,12 @@ export async function POST(
       if (!body.category || !categoryIds.includes(body.category) || room.rollsUsed < 1) {
         return Response.json({ error: "請先擲骰，再選擇計分格。" }, { status: 400 });
       }
-      const [scoreCount] = await db
-        .select({ value: count() })
-        .from(scores)
-        .where(eq(scores.roomId, room.id));
+      if (roomScores.some((entry) => entry.playerId === player.id && entry.category === body.category)) {
+        return Response.json({ error: "這個計分格已使用。" }, { status: 409 });
+      }
       const value = scoreDice(body.category, JSON.parse(room.diceJson) as number[]);
-      const next = await scoreAndAdvance({
-        room,
-        playerId: player.id,
-        category: body.category,
-        value,
-        playerCount: roomPlayers.length,
-        scoreCountBefore: scoreCount?.value ?? 0,
+      const next = await commitMatch(room, roomPlayers, roomScores, {
+        score: { playerId: player.id, category: body.category, score: value }, advance: true,
       });
       if (!next) {
         return Response.json(

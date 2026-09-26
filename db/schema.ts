@@ -64,6 +64,7 @@ export const players = sqliteTable(
     seat: integer("seat").notNull(),
     tokenHash: text("token_hash").notNull(),
     joinedAt: text("joined_at").notNull(),
+    surrenderReason: text("surrender_reason", { enum: ["manual", "automatic"] }),
   },
   (table) => [
     uniqueIndex("players_room_seat_unique").on(table.roomId, table.seat),

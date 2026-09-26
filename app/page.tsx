@@ -26,16 +26,27 @@ import {
 } from "@/lib/dice-animation";
 import {
   categories,
+  recommendScore,
   scoreDice,
   scoreSummary,
   type CategoryId,
 } from "@/lib/game";
+import {
+  hasYazy,
+  historyStats,
+  placeFor,
+  type HistoryStats,
+  type VersusRecord,
+} from "@/lib/stats";
 import {
   findResumableSession,
   selectBrowserSession,
   upsertBrowserSession,
   type BrowserSession as Session,
 } from "@/lib/browser-session";
+import { resultValue, maximumFinalScore, type SurrenderReason } from "@/lib/match";
+import { Modal } from "./components/modal";
+import { RequestScope } from "@/lib/request-scope";
 
 type RoomState = {
   room: {
@@ -53,7 +64,7 @@ type RoomState = {
     updatedAt: string;
     finishedAt: string | null;
   };
-  players: Array<{ id: string; name: string; seat: number }>;
+  players: Array<{ id: string; name: string; seat: number; surrenderReason: SurrenderReason }>;
   scores: Array<{ playerId: string; category: string; score: number }>;
 };
 
@@ -62,8 +73,10 @@ type HistoryGame = {
   finishedAt: string;
   players: Array<{
     id: string;
+    userId?: string | null;
     name: string;
     isMe?: boolean;
+    surrenderReason?: SurrenderReason;
     scores: Array<{ category: string; score: number }>;
   }>;
 };
@@ -77,7 +90,7 @@ type AccountUser = {
 
 type AccountProfile = {
   user: AccountUser;
-  stats: { games: number; wins: number; bestScore: number; averageScore: number };
+  stats: HistoryStats;
   games: HistoryGame[];
 };
 
@@ -87,7 +100,7 @@ type FriendSummary = {
   username: string;
   displayName: string;
   games: number;
-  together: number;
+  record: VersusRecord | null;
 };
 
 type FriendRequest = {
@@ -138,12 +151,75 @@ const NO_FRIENDS: FriendsPayload = {
  * paint so the die never shows one number for a frame and then another.
  */
 const blankThrowFace = (index: number) => ((index * 2 + 1) % 6) + 1;
+
+const historyDate = new Intl.DateTimeFormat("zh-TW", {
+  month: "long",
+  day: "numeric",
+});
+
+/**
+ * One finished game read as a result: who won it, where you came, and whether
+ * a YAZY went down.
+ *
+ * Places are counted rather than taken from the sorted position, so two people
+ * on the same total are both second rather than second and third.
+ */
+function readGame(game: HistoryGame) {
+  const lines = game.players
+    .map((player) => ({ ...player, total: scoreSummary(player.scores).total }))
+    .sort((a, b) => resultValue(b.total, b.surrenderReason) - resultValue(a.total, a.surrenderReason));
+  const mine = lines.find((line) => line.isMe) ?? null;
+  return {
+    lines,
+    mine,
+    winner: lines[0] ?? null,
+    place: mine ? placeFor(resultValue(mine.total, mine.surrenderReason), lines.map((line) => resultValue(line.total, line.surrenderReason))) : 0,
+    yazy: Boolean(mine && hasYazy(mine)),
+  };
+}
 /** How far apart the dice come down, so they land as a run rather than a slab. */
 const DIE_SETTLE_STAGGER = 80;
 const ROLL_SAFETY_TIMEOUT = 5_000;
 /** Shared by all five sprites: the shadow is the same gradient under each. */
 const SHADOW_GLOW_ID = "yazy-die-shadow-glow";
 const SHADOW_CORE_ID = "yazy-die-shadow-core";
+
+/**
+ * The die-and-wordmark in the header. Same three-face isometric die as the
+ * roll tray, drawn plain (no shared defs/ids) since it's the only instance
+ * mounted at a time across the three header variants.
+ */
+function BrandMark() {
+  return (
+    <svg
+      className="brand-mark"
+      viewBox="0 0 104 120"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <polygon points="51.96,0 103.92,30 51.96,60 0,30" fill="#e8a06a" />
+      <polygon points="51.96,60 103.92,30 103.92,90 51.96,120" fill="#d4864b" />
+      <polygon points="0,30 51.96,60 51.96,120 0,90" fill="#b96e37" />
+      <g fill="#fffdf9">
+        <g transform="matrix(51.96,30,-51.96,30,51.96,0)">
+          <circle cx="0.28" cy="0.28" r="0.105" />
+          <circle cx="0.72" cy="0.28" r="0.105" />
+          <circle cx="0.5" cy="0.5" r="0.105" />
+          <circle cx="0.28" cy="0.72" r="0.105" />
+          <circle cx="0.72" cy="0.72" r="0.105" />
+        </g>
+        <g opacity="0.92" transform="matrix(51.96,30,0,60,0,30)">
+          <circle cx="0.5" cy="0.5" r="0.105" />
+        </g>
+        <g opacity="0.92" transform="matrix(51.96,-30,0,60,51.96,60)">
+          <circle cx="0.28" cy="0.28" r="0.105" />
+          <circle cx="0.5" cy="0.5" r="0.105" />
+          <circle cx="0.72" cy="0.72" r="0.105" />
+        </g>
+      </g>
+    </svg>
+  );
+}
 
 /**
  * The two shadow gradients, rendered once for the whole tray. `url(#id)`
@@ -371,7 +447,9 @@ function TurnCountdown({
 
 function readSessions(): Session[] {
   try {
-    return JSON.parse(localStorage.getItem(SESSION_KEY) ?? "[]") as Session[];
+    const value: unknown = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "[]");
+    return Array.isArray(value) ? value.filter((item): item is Session =>
+      item && [item.code, item.playerId, item.token, item.name].every((field) => typeof field === "string")) : [];
   } catch {
     return [];
   }
@@ -398,10 +476,18 @@ export default function Home() {
    * anything. This flips twice a roll: once on the throw, once when they stop.
    */
   const [diceInFlight, setDiceInFlight] = useState(NO_DICE_IN_FLIGHT);
+  /**
+   * The dice values potential scores are computed from. Deliberately lags
+   * `state.room.dice`, which lands as soon as the server responds — well
+   * before the throw animation settles. Without this, the score list would
+   * flash the new numbers while the dice on the table were still tumbling.
+   */
+  const [settledDice, setSettledDice] = useState<number[]>([]);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [scorePlayerId, setScorePlayerId] = useState<string | null>(null);
   /** Narrow screens show the first six rows until this is opened. */
   const [scoreExpanded, setScoreExpanded] = useState(false);
+  const [confirmSurrender, setConfirmSurrender] = useState(false);
   const [showFinalCards, setShowFinalCards] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -411,7 +497,9 @@ export default function Home() {
   const [account, setAccount] = useState<AccountUser | null>(null);
   const [profile, setProfile] = useState<AccountProfile | null>(null);
   const [accountPanelOpen, setAccountPanelOpen] = useState(false);
-  const [profileTab, setProfileTab] = useState<"profile" | "friends">("profile");
+  const [profileTab, setProfileTab] = useState<"profile" | "record" | "friends">(
+    "profile",
+  );
   const [friends, setFriends] = useState<FriendsPayload>(NO_FRIENDS);
   const [friendUsername, setFriendUsername] = useState("");
   const [friendBusy, setFriendBusy] = useState(false);
@@ -449,7 +537,9 @@ export default function Home() {
    *  take them back off it. */
   const scheduledImpactsRef = useRef<OscillatorNode[]>([]);
   const holdSyncTimer = useRef<number | null>(null);
-  const holdRequestRef = useRef<Promise<void> | null>(null);
+  const holdRequestRef = useRef<Promise<boolean> | null>(null);
+  const roomScope = useRef(new RequestScope());
+  const accountScope = useRef(new RequestScope());
   /** Hold selection waiting out the debounce window, not yet sent. */
   const pendingHoldRef = useRef<boolean[] | null>(null);
   const actionBusyRef = useRef(false);
@@ -771,23 +861,42 @@ export default function Home() {
   );
 
   const loadFriends = useCallback(async () => {
-    const response = await fetch("/api/friends", { cache: "no-store" });
-    if (!response.ok) {
-      setFriends(NO_FRIENDS);
-      return;
+    const signal = accountScope.current.signal;
+    try {
+      const response = await fetch("/api/friends", { cache: "no-store", signal });
+      if (!response.ok) return;
+      const data = (await response.json()) as FriendsPayload;
+      if (accountScope.current.accepts(signal)) setFriends(data);
+    } catch {
+      // Keep the last successful snapshot during a temporary outage.
     }
-    setFriends((await response.json()) as FriendsPayload);
+  }, []);
+
+  const loadInvites = useCallback(async () => {
+    const signal = accountScope.current.signal;
+    try {
+      const response = await fetch("/api/invites", { cache: "no-store", signal });
+      if (!response.ok) return;
+      const data = (await response.json()) as { invites: RoomInvite[] };
+      if (accountScope.current.accepts(signal)) {
+        setFriends((current) => ({ ...current, invites: data.invites }));
+      }
+    } catch { /* Retry on the next poll; preserve the previous snapshot. */ }
   }, []);
 
   const refreshProfile = useCallback(async () => {
-    const response = await fetch("/api/profile", { cache: "no-store" });
-    if (!response.ok) {
+    const signal = accountScope.current.signal;
+    const response = await fetch("/api/profile", { cache: "no-store", signal });
+    if (!accountScope.current.accepts(signal)) return true;
+    if (response.status === 401) {
       setAccount(null);
       setProfile(null);
       setFriends(NO_FRIENDS);
       return false;
     }
+    if (!response.ok) throw new Error("無法更新個人資料，請稍後再試。");
     const next = (await response.json()) as AccountProfile;
+    if (!accountScope.current.accepts(signal)) return true;
     setAccount(next.user);
     setProfile(next);
     setName(next.user.displayName);
@@ -800,10 +909,12 @@ export default function Home() {
   // Always re-reads localStorage rather than closing over a snapshot, so a
   // game finished during this visit is included.
   const refreshHistory = useCallback(async () => {
+    const signal = accountScope.current.signal;
     try {
       if (await refreshProfile()) return;
       const response = await fetch("/api/history", {
         method: "POST",
+        signal,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           sessions: readSessions().map(({ playerId, token }) => ({
@@ -813,13 +924,17 @@ export default function Home() {
         }),
       });
       const data = (await response.json()) as { games?: HistoryGame[] };
-      setHistory(data.games ?? []);
+      if (!response.ok) throw new Error("無法讀取戰績");
+      if (accountScope.current.accepts(signal)) setHistory(data.games ?? []);
+    } catch {
+      if (accountScope.current.accepts(signal)) setAccountError("暫時無法更新戰績，請稍後再試。");
     } finally {
-      setHistoryLoaded(true);
+      if (accountScope.current.accepts(signal)) setHistoryLoaded(true);
     }
   }, [refreshProfile]);
 
   const fetchRoom = useCallback(async (code: string, quiet = false) => {
+    const signal = roomScope.current.signal;
     try {
       const headers: HeadersInit = {};
       if (roomEtagRef.current) {
@@ -828,7 +943,9 @@ export default function Home() {
       const response = await fetch(`/api/rooms/${code}`, {
         cache: "no-store",
         headers,
+        signal,
       });
+      if (!roomScope.current.accepts(signal)) return;
       if (response.status === 304) return;
       if (!response.ok) {
         if (!quiet) {
@@ -838,6 +955,7 @@ export default function Home() {
         return;
       }
       const next = (await response.json()) as RoomState;
+      if (!roomScope.current.accepts(signal)) return;
       const previous = stateRef.current;
       if (
         previous?.room.code === next.room.code &&
@@ -859,12 +977,15 @@ export default function Home() {
         pendingHoldRef.current = null;
         heldRef.current = next.room.held;
         setHeld(next.room.held);
+      } else if (!pendingHoldRef.current && !holdRequestRef.current) {
+        heldRef.current = next.room.held;
+        setHeld(next.room.held);
       }
       if (newRoll) revealRollResult(next.room.held, next.room.dice);
       stateRef.current = next;
       setState(next);
     } catch {
-      if (!quiet) setError("連線中斷，正在嘗試重新連線。");
+      if (!quiet && roomScope.current.accepts(signal)) setError("連線中斷，正在嘗試重新連線。");
     }
   }, [revealRollResult]);
 
@@ -873,6 +994,8 @@ export default function Home() {
   useEffect(
     () => () => {
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      roomScope.current.reset();
+      accountScope.current.reset();
     },
     [],
   );
@@ -921,7 +1044,7 @@ export default function Home() {
   useEffect(() => {
     if (!account || session) return;
     const check = () => {
-      if (document.visibilityState === "visible") void loadFriends();
+      if (document.visibilityState === "visible") void loadInvites();
     };
     const timer = window.setInterval(check, 20_000);
     document.addEventListener("visibilitychange", check);
@@ -929,27 +1052,36 @@ export default function Home() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", check);
     };
-  }, [account, loadFriends, session]);
+  }, [account, loadInvites, session]);
 
   useEffect(() => {
     if (!session) return;
     const status = state?.room.status;
     if (status === "finished") return;
     let timer: number | null = null;
+    let stopped = false;
+    let reading = false;
+    const poll = async () => {
+      if (reading || stopped) return;
+      reading = true;
+      try { await fetchRoom(session.code, true); }
+      finally { reading = false; if (!stopped) schedule(); }
+    };
     const schedule = () => {
-      if (timer !== null) window.clearInterval(timer);
+      if (timer !== null) window.clearTimeout(timer);
       const interval =
         document.visibilityState === "hidden" ? 15_000 : status === "waiting" ? 4_000 : 1_500;
-      timer = window.setInterval(() => void fetchRoom(session.code, true), interval);
+      timer = window.setTimeout(() => void poll(), interval);
     };
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") void fetchRoom(session.code, true);
-      schedule();
+      if (document.visibilityState === "visible") void poll();
+      else schedule();
     };
     schedule();
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      if (timer !== null) window.clearInterval(timer);
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [fetchRoom, session, state?.room.status]);
@@ -972,7 +1104,17 @@ export default function Home() {
   const me = state?.players.find((player) => player.id === session?.playerId);
   const isMyTurn =
     state?.room.status === "playing" && currentPlayer?.id === session?.playerId;
+  const activePlayers = state?.players.filter((player) => !player.surrenderReason) ?? [];
+  const soleSurvivor = activePlayers.length === 1 ? activePlayers[0] : null;
   const rolling = diceInFlight.some(Boolean);
+  // Syncs from an external timer-driven animation, not from React state or
+  // props, so there is no way to compute this during render.
+  useEffect(() => {
+    if (!rolling && state?.room.dice.length === 5) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSettledDice(state.room.dice);
+    }
+  }, [rolling, state?.room.dice]);
   const visibleHeld = isMyTurn
     ? held
     : state?.room.held ?? [false, false, false, false, false];
@@ -1016,7 +1158,7 @@ export default function Home() {
   }, [state?.players, state?.scores]);
   /**
    * What every still-empty category would pay for the dice on the table, and
-   * which of them pays most.
+   * which adds most to the total, including a newly earned upper bonus.
    *
    * The highest one is badged rather than sorted to the top: the card has to
    * stay in the same order every turn to stay readable, so the hint rides on
@@ -1030,24 +1172,21 @@ export default function Home() {
     const previews = new Map<CategoryId, number>();
     for (const category of categories) {
       if (filled.has(category.id)) continue;
-      previews.set(category.id, scoreDice(category.id, state.room.dice));
+      previews.set(category.id, scoreDice(category.id, settledDice));
     }
     return previews;
-  }, [state, viewedPlayerIsRolling, viewedScores]);
-  const bestPreview = useMemo(() => {
-    let best: { id: CategoryId; score: number } | null = null;
-    for (const [id, score] of previewScores) {
-      if (score > 0 && (!best || score > best.score)) best = { id, score };
-    }
-    return best;
-  }, [previewScores]);
+  }, [settledDice, state, viewedPlayerIsRolling, viewedScores]);
+  const bestPreview = useMemo(
+    () => recommendScore(previewScores, viewedScores),
+    [previewScores, viewedScores],
+  );
   const rankings = useMemo(
     () =>
       state
         ? [...state.players].sort(
             (a, b) =>
-              (scoreSummaries.get(b.id)?.total ?? 0) -
-              (scoreSummaries.get(a.id)?.total ?? 0),
+              resultValue(scoreSummaries.get(b.id)?.total ?? 0, b.surrenderReason) -
+              resultValue(scoreSummaries.get(a.id)?.total ?? 0, a.surrenderReason),
           )
         : [],
     [scoreSummaries, state],
@@ -1091,6 +1230,7 @@ export default function Home() {
         name: name.trim(),
       };
       saveSession(nextSession);
+      roomScope.current.reset();
       setSession(nextSession);
       setResumable(null);
       setScorePlayerId(nextSession.playerId);
@@ -1129,6 +1269,7 @@ export default function Home() {
         return;
       }
       setAccount(data.user);
+      accountScope.current.reset();
       setName(data.user.displayName);
       setProfileName(data.user.displayName);
       setAuthPassword("");
@@ -1253,11 +1394,14 @@ export default function Home() {
       invites: current.invites.filter((invite) => invite.id !== id),
     }));
     try {
-      await fetch("/api/invites", {
+      const response = await fetch("/api/invites", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ id }),
       });
+      if (!response.ok) setError("未能略過邀請，請再試一次。");
+    } catch {
+      setError("連線失敗，請再試一次。");
     } finally {
       await loadFriends();
     }
@@ -1267,7 +1411,9 @@ export default function Home() {
     setAccountBusy(true);
     setAccountError("");
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("登出失敗");
+      accountScope.current.reset();
       setAccount(null);
       setProfile(null);
       setFriends(NO_FRIENDS);
@@ -1275,16 +1421,19 @@ export default function Home() {
       setHistory([]);
       setHistoryLoaded(true);
       setName("");
+    } catch {
+      setAccountError("尚未成功登出，請再試一次。");
     } finally {
       setAccountBusy(false);
     }
   }
 
   async function action(
-    actionName: "start" | "roll" | "score" | "skip",
+    actionName: "start" | "roll" | "score" | "skip" | "surrender" | "finish",
     category?: CategoryId,
   ) {
     if (!session || !stateRef.current || actionBusyRef.current) return;
+    const signal = roomScope.current.signal;
     actionBusyRef.current = true;
     setBusy(true);
     setError("");
@@ -1303,13 +1452,14 @@ export default function Home() {
         // anyway, so a queued hold is not worth a round trip.
         await discardPendingHold();
       }
+      if (!roomScope.current.accepts(signal)) return;
       if (actionName === "roll") startRollAnimation(heldRef.current, true);
 
       let response: Response | null = null;
       let data: { error?: string } = {};
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const latestState = stateRef.current;
-        if (!latestState || latestState.room.code !== session.code) return;
+        if (!roomScope.current.accepts(signal) || !latestState || latestState.room.code !== session.code) return;
         response = await fetch(`/api/rooms/${session.code}/action`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1323,6 +1473,7 @@ export default function Home() {
           }),
         });
         data = (await response.json()) as { error?: string };
+        if (!roomScope.current.accepts(signal)) return;
         const recoverableConflict =
           response.status === 409 && data.error?.includes("狀態已變更");
         if (!recoverableConflict || attempt === 1) break;
@@ -1340,6 +1491,7 @@ export default function Home() {
         setHeld(empty);
       }
       await fetchRoom(session.code);
+      if (!roomScope.current.accepts(signal)) return;
       // The reveal normally rides on `fetchRoom` noticing `rollsUsed` climb.
       // That inference can be missed — most easily when a poll lands the new
       // room state first, leaving this fetch with nothing new to spot — and a
@@ -1357,8 +1509,10 @@ export default function Home() {
         );
       }
     } catch {
-      if (actionName === "roll") resetRollAnimation();
-      setError("連線失敗，請再試一次。");
+      if (roomScope.current.accepts(signal)) {
+        if (actionName === "roll") resetRollAnimation();
+        setError("連線失敗，請再試一次。");
+      }
     } finally {
       actionBusyRef.current = false;
       setBusy(false);
@@ -1402,8 +1556,10 @@ export default function Home() {
   function sendPendingHold(): Promise<boolean> {
     const nextHeld = pendingHoldRef.current;
     if (!session || !nextHeld) {
-      return (holdRequestRef.current ?? Promise.resolve()).then(() => true);
+      return holdRequestRef.current ?? Promise.resolve(true);
     }
+    const signal = roomScope.current.signal;
+    const origin = stateRef.current?.room;
     pendingHoldRef.current = null;
     const previousRequest = holdRequestRef.current;
     const request = (async () => {
@@ -1416,7 +1572,10 @@ export default function Home() {
         for (let attempt = 0; attempt < 2; attempt += 1) {
           const latestState = stateRef.current;
           if (
+            !roomScope.current.accepts(signal) ||
             !latestState ||
+            latestState.room.round !== origin?.round ||
+            latestState.room.rollsUsed !== origin?.rollsUsed ||
             latestState.room.code !== session.code ||
             latestState.players.find((player) => player.id === session.playerId)?.seat !==
               latestState.room.currentSeat ||
@@ -1426,6 +1585,7 @@ export default function Home() {
           }
           const response = await fetch(`/api/rooms/${session.code}/action`, {
             method: "POST",
+            signal,
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               action: "hold",
@@ -1439,6 +1599,7 @@ export default function Home() {
             error?: string;
             updatedAt?: string;
           };
+          if (!roomScope.current.accepts(signal)) return false;
           if (!response.ok) {
             await fetchRoom(session.code, true);
             if (response.status === 409 && attempt === 0) continue;
@@ -1448,7 +1609,7 @@ export default function Home() {
             return false;
           }
           const current = stateRef.current;
-          if (current?.room.code === session.code && data.updatedAt) {
+          if (current?.room.code === session.code && data.updatedAt && data.updatedAt >= current.room.updatedAt) {
             const nextState = {
               ...current,
               room: {
@@ -1464,17 +1625,33 @@ export default function Home() {
         }
         return false;
       } catch {
-        await fetchRoom(session.code, true);
-        setError("無法同步鎖骰狀態，請再試一次。");
+        if (roomScope.current.accepts(signal)) {
+          await fetchRoom(session.code, true);
+          setError("無法同步鎖骰狀態，請再試一次。");
+        }
         return false;
       }
     })();
-    const tracked = request.then(() => undefined);
+    const tracked = request.then((success) => {
+      const current = stateRef.current?.room;
+      if (!success && roomScope.current.accepts(signal) && current?.code === session.code &&
+          current.round === origin?.round && current.currentSeat === origin?.currentSeat &&
+          current.rollsUsed === origin?.rollsUsed) {
+        pendingHoldRef.current ??= heldRef.current;
+      }
+      return success;
+    });
     holdRequestRef.current = tracked;
     void tracked.finally(() => {
-      if (holdRequestRef.current === tracked) holdRequestRef.current = null;
+      if (holdRequestRef.current === tracked) {
+        holdRequestRef.current = null;
+        if (!pendingHoldRef.current && roomScope.current.accepts(signal) && stateRef.current) {
+          heldRef.current = stateRef.current.room.held;
+          setHeld(heldRef.current);
+        }
+      }
     });
-    return request;
+    return tracked;
   }
 
   /**
@@ -1498,11 +1675,14 @@ export default function Home() {
       holdSyncTimer.current = null;
     }
     pendingHoldRef.current = null;
-    return holdRequestRef.current ?? Promise.resolve();
+    return (holdRequestRef.current ?? Promise.resolve(true)).then(() => {
+      pendingHoldRef.current = null;
+    });
   }
 
   function resumeAs(previous: Session) {
     saveSession(previous);
+    roomScope.current.reset();
     setSession(previous);
     setResumable(null);
     setName(previous.name);
@@ -1513,6 +1693,9 @@ export default function Home() {
   }
 
   function leaveRoom() {
+    setConfirmSurrender(false);
+    roomScope.current.reset();
+    holdRequestRef.current = null;
     setInvitedIds([]);
     if (session) {
       sessionStorage.removeItem(`${ACTIVE_SESSION_PREFIX}:${session.code}`);
@@ -1542,9 +1725,11 @@ export default function Home() {
   async function copyInvite() {
     if (!state) return;
     const url = `${window.location.origin}${window.location.pathname}?room=${state.room.code}`;
-    await navigator.clipboard.writeText(url);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch { setError("無法複製，請直接分享房間代碼。"); }
   }
 
   // Requests and invitations arrive while the panel is shut, so it opens onto
@@ -1567,15 +1752,33 @@ export default function Home() {
     });
   }
 
+  /**
+   * Your own record over everything the server was willing to look back on.
+   *
+   * A signed-in account gets it from the profile read, which counts far more
+   * games than any list here shows; a guest's is worked out from the games
+   * this browser still holds a seat for.
+   */
+  const stats = useMemo(
+    () => profile?.stats ?? historyStats(history),
+    [history, profile?.stats],
+  );
+  /** The finished games you actually sat at, newest first. */
+  const myGames = useMemo(
+    () => history.filter((game) => game.players.some((player) => player.isMe)),
+    [history],
+  );
+  /** Friends you have really sat down with, the most-played first. */
+  const rivals = useMemo(
+    () =>
+      friends.friends
+        .filter((friend) => friend.record !== null)
+        .sort((a, b) => (b.record?.games ?? 0) - (a.record?.games ?? 0)),
+    [friends.friends],
+  );
+
   const accountLayer = accountPanelOpen ? (
-    <div className="account-backdrop" role="presentation" onMouseDown={() => setAccountPanelOpen(false)}>
-      <section
-        aria-label={account ? "個人資料" : "使用者登入"}
-        aria-modal="true"
-        className="account-panel"
-        onMouseDown={(event) => event.stopPropagation()}
-        role="dialog"
-      >
+    <Modal label={account ? "個人資料" : "使用者登入"} onClose={() => setAccountPanelOpen(false)}>
         <button
           aria-label="關閉"
           className="account-close"
@@ -1600,6 +1803,11 @@ export default function Home() {
                 type="button"
               >個人資料</button>
               <button
+                className={profileTab === "record" ? "active" : ""}
+                onClick={() => setProfileTab("record")}
+                type="button"
+              >戰績</button>
+              <button
                 className={profileTab === "friends" ? "active" : ""}
                 onClick={() => setProfileTab("friends")}
                 type="button"
@@ -1612,6 +1820,7 @@ export default function Home() {
             </div>
             {profileTab === "profile" ? (
               <>
+                <p className="record-note">統計最近 200 場完成對局</p>
                 <div className="profile-stats">
                   <article><strong>{profile.stats.games}</strong><span>完成場次</span></article>
                   <article><strong>{profile.stats.wins}</strong><span>勝場</span></article>
@@ -1649,6 +1858,90 @@ export default function Home() {
                   加入日期：{new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium" }).format(new Date(account.createdAt))}
                 </p>
               </>
+            ) : profileTab === "record" ? (
+              <div className="record-block">
+                <p className="record-note">個人與好友對戰統計以你最近 200 場完成對局為準。</p>
+                <div className="profile-stats trio">
+                  <article><strong>{stats.games}</strong><span>完成場次</span></article>
+                  <article><strong>{stats.winRate}%</strong><span>勝率</span></article>
+                  <article>
+                    <strong>{stats.wins}<i>/{stats.contested}</i></strong>
+                    <span>勝場</span>
+                  </article>
+                  <article><strong>{stats.bestScore}</strong><span>最高分</span></article>
+                  <article><strong>{stats.averageScore}</strong><span>平均分</span></article>
+                  <article><strong>{stats.yazyRate}%</strong><span>YAZY 率</span></article>
+                </div>
+                {stats.games === 0 ? (
+                  <p className="friend-empty">還沒有打完的場次。玩完一桌就有了。</p>
+                ) : (
+                  <p className="record-note">
+                    打出過 {stats.yazy} 次 YAZY
+                    {stats.contested > 0 &&
+                      ` · 對戰 ${stats.contested} 場，敗 ${stats.losses}${stats.ties > 0 ? `，和 ${stats.ties}` : ""}`}
+                  </p>
+                )}
+
+                <div className="friend-group">
+                  <h3>好友對戰</h3>
+                  {rivals.length === 0 ? (
+                    <p className="friend-empty">
+                      還沒跟好友同桌過。開一桌邀他們來，這裡就會記著。
+                    </p>
+                  ) : (
+                    rivals.map((friend) => (
+                      <article className="friend-row" key={friend.friendshipId}>
+                        <span className="avatar">
+                          {friend.displayName.slice(0, 1).toUpperCase()}
+                        </span>
+                        <div className="friend-copy">
+                          <strong>{friend.displayName}</strong>
+                          <small>
+                            一起 {friend.record?.games} 場 · 平均 {friend.record?.myAverage} 比{" "}
+                            {friend.record?.theirAverage}
+                          </small>
+                        </div>
+                        <div className="versus-record">
+                          <b>{friend.record?.wins}</b>勝
+                          <b>{friend.record?.losses}</b>敗
+                          {(friend.record?.ties ?? 0) > 0 && (
+                            <>
+                              <b>{friend.record?.ties}</b>和
+                            </>
+                          )}
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+
+                {myGames.length > 0 && (
+                  <div className="friend-group">
+                    <h3>最近的場次</h3>
+                    {myGames.map((game) => {
+                      const result = readGame(game);
+                      return (
+                        <article
+                          className="record-game"
+                          key={`${game.code}-${game.finishedAt}`}
+                        >
+                          <div className="friend-copy">
+                            <strong>
+                              第 {result.place} 名
+                              {result.yazy && <i className="record-yazy">YAZY</i>}
+                            </strong>
+                            <small>
+                              {historyDate.format(new Date(game.finishedAt))} ·{" "}
+                              {result.lines.length} 人 · 勝者 {result.winner?.total} 分
+                            </small>
+                          </div>
+                          <b>{result.mine?.total}</b>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="friends-block">
                 <div className="friend-add">
@@ -1728,7 +2021,11 @@ export default function Home() {
                         <div className="friend-copy">
                           <strong>{friend.displayName}</strong>
                           <small>
-                            {friend.games} 場 · 一起玩過 {friend.together} 場
+                            {friend.record
+                              ? `一起 ${friend.record.games} 場 · ${friend.record.wins} 勝 ${friend.record.losses} 敗${
+                                  friend.record.ties > 0 ? ` ${friend.record.ties} 和` : ""
+                                }`
+                              : `${friend.games} 場 · 還沒同桌過`}
                           </small>
                         </div>
                         <div className="friend-actions">
@@ -1791,7 +2088,7 @@ export default function Home() {
                 type="button"
               >註冊</button>
             </div>
-            <div className="auth-form">
+            <form className="auth-form" onSubmit={(event) => { event.preventDefault(); void submitAccount(); }}>
               {authMode === "register" && (
                 <label>
                   <span>你想用什麼名字</span>
@@ -1830,27 +2127,18 @@ export default function Home() {
               <button
                 className="primary-action"
                 disabled={accountBusy}
-                onClick={submitAccount}
-                type="button"
+                type="submit"
               >
                 {accountBusy ? "請稍候…" : authMode === "login" ? "登入" : "開帳號"}
               </button>
-            </div>
+            </form>
           </>
         )}
-      </section>
-    </div>
+    </Modal>
   ) : null;
 
   const settingsLayer = settingsPanelOpen ? (
-    <div className="account-backdrop" role="presentation" onMouseDown={() => setSettingsPanelOpen(false)}>
-      <section
-        aria-label="設定"
-        aria-modal="true"
-        className="account-panel"
-        onMouseDown={(event) => event.stopPropagation()}
-        role="dialog"
-      >
+    <Modal label="設定" onClose={() => setSettingsPanelOpen(false)}>
         <button
           aria-label="關閉"
           className="account-close"
@@ -1870,8 +2158,7 @@ export default function Home() {
             落地音效{soundEnabled ? "開" : "關"}
           </button>
         </div>
-      </section>
-    </div>
+    </Modal>
   ) : null;
 
   if (!initialized || (session && connecting && !state)) {
@@ -1879,7 +2166,7 @@ export default function Home() {
       <main className="game-shell connecting">
         <header className="topbar">
           <div className="brand">
-            <span className="brand-mark">Y</span>
+            <BrandMark />
             <span>yazy</span>
           </div>
         </header>
@@ -1931,7 +2218,12 @@ export default function Home() {
               <span>
                 {category.label}
                 {bestPreview?.id === category.id && (
-                  <span className="best-tag">最多分</span>
+                  <span
+                    className="best-tag"
+                    title={`現在填入可增加 ${bestPreview.gain} 分${bestPreview.bonusGain ? "（含上半部獎勵 35 分）" : ""}；同分優先特殊牌型。未計算後續擲骰策略。`}
+                  >
+                    {bestPreview.bonusGain ? "含獎勵最多分" : "目前最多分"}
+                  </span>
                 )}
               </span>
             );
@@ -1990,7 +2282,7 @@ export default function Home() {
       <main className="game-shell">
         <header className="topbar">
           <button className="brand" onClick={leaveRoom} aria-label="回到首頁">
-            <span className="brand-mark">Y</span>
+            <BrandMark />
             <span>yazy</span>
           </button>
           <div className="topbar-actions">
@@ -2090,6 +2382,25 @@ export default function Home() {
         {state.room.status === "playing" && (
           <div className="game-grid">
             <section className="table-panel">
+              <div className="concession-panel" aria-live="polite">
+                {soleSurvivor ? (
+                  <>
+                    <strong>{soleSurvivor.id === session.playerId ? "你已獲勝！" : `${soleSurvivor.name}已獲勝`}</strong>
+                    <p>其他玩家已投降。勝者可以繼續擲骰填滿計分卡，挑戰分數紀錄。</p>
+                    {soleSurvivor.id === session.playerId && <button className="ghost-action" disabled={busy || rolling}
+                      onClick={() => action("finish")} type="button">立即結算</button>}
+                    {soleSurvivor.id === session.playerId && <p>想挑戰紀錄？直接繼續擲骰即可。</p>}
+                  </>
+                ) : me?.surrenderReason ? (
+                  <p>{me.surrenderReason === "automatic" ? "剩餘最高分已無法追平領先者，系統已自動投降。" : "你已投降。"}仍可觀看本局。</p>
+                ) : (
+                  <>
+                    <p>無法追平時會自動投降；勝者仍可繼續挑戰紀錄。你目前最高可達 {maximumFinalScore(state.scores.filter((score) => score.playerId === session.playerId))} 分。</p>
+                    <button className="feedback-toggle" disabled={busy || rolling} type="button"
+                      onClick={() => setConfirmSurrender(true)}>投降</button>
+                  </>
+                )}
+              </div>
               <div className="turn-heading">
                 <div>
                   <p className="round-label">第 {state.room.round} / 13 回</p>
@@ -2230,7 +2541,7 @@ export default function Home() {
                       <span className="player-copy">
                         {player.name}
                         {player.id === session.playerId ? "（你）" : ""}
-                        <small>{summary.total}</small>
+                        <small>{summary.total}{player.surrenderReason ? ` · ${player.surrenderReason === "automatic" ? "自動投降" : "已投降"}` : ""}</small>
                       </span>
                     </article>
                   );
@@ -2246,13 +2557,13 @@ export default function Home() {
           <>
             <section className="results-card">
               <h1>這局結束了</h1>
-              <p>今天最高分是{rankings[0]?.name ?? "大家"}。玩得開心就好。</p>
+              <p>本局勝者是{rankings.filter((player) => !player.surrenderReason && scoreSummaries.get(player.id)?.total === scoreSummaries.get(rankings[0]?.id)?.total).map((player) => player.name).join("、") || "大家"}。玩得開心就好。</p>
               <ol className="podium">
-                {rankings.map((player, index) => (
-                  <li className={`podium-place place-${index + 1}`} key={player.id}>
-                    <span className="rank">{index + 1}</span>
+                {rankings.map((player) => (
+                  <li className={`podium-place place-${placeFor(resultValue(scoreSummaries.get(player.id)?.total ?? 0, player.surrenderReason), rankings.map((entry) => resultValue(scoreSummaries.get(entry.id)?.total ?? 0, entry.surrenderReason)))}`} key={player.id}>
+                    <span className="rank">{placeFor(resultValue(scoreSummaries.get(player.id)?.total ?? 0, player.surrenderReason), rankings.map((entry) => resultValue(scoreSummaries.get(entry.id)?.total ?? 0, entry.surrenderReason)))}</span>
                     <span className="avatar">{player.name.slice(0, 1).toUpperCase()}</span>
-                    <strong>{player.name}</strong>
+                    <strong>{player.name}{player.surrenderReason ? "（投降）" : ""}</strong>
                     <b>{scoreSummaries.get(player.id)?.total ?? 0}</b>
                   </li>
                 ))}
@@ -2274,6 +2585,16 @@ export default function Home() {
             {showFinalCards && <div className="final-cards">{scoreCard}</div>}
           </>
         )}
+        {confirmSurrender && state.room.status === "playing" && !me?.surrenderReason && !soleSurvivor && (
+          <Modal label="確認投降" onClose={() => setConfirmSurrender(false)}>
+            <h2>確定要投降？</h2>
+            <p>投降後本局判負，保留已得分數，無法再擲骰。其他玩家可以繼續挑戰分數紀錄。</p>
+            <div className="results-actions">
+              <button className="ghost-action" onClick={() => setConfirmSurrender(false)}>繼續玩</button>
+              <button className="primary-action" disabled={busy} onClick={() => { setConfirmSurrender(false); void action("surrender"); }}>確認投降</button>
+            </div>
+          </Modal>
+        )}
         {accountLayer}
       </main>
     );
@@ -2283,7 +2604,7 @@ export default function Home() {
     <main className="landing">
       <header className="landing-nav">
         <div className="brand">
-          <span className="brand-mark">Y</span>
+          <BrandMark />
           <span>yazy</span>
         </div>
         <div className="nav-actions">
@@ -2311,7 +2632,7 @@ export default function Home() {
         <div className="hero-copy">
           <h1>yazy battle!</h1>
           <p className="hero-lead">
-            開一桌，把六位代碼給朋友。沒有計時、沒有輸贏壓力，想聊多久就聊多久。
+            開一桌，把六位代碼給朋友。慢慢玩；回合超過 90 秒，朋友可以選擇跳過。
           </p>
         </div>
 
@@ -2366,7 +2687,7 @@ export default function Home() {
               />
             </label>
 
-            {mode === "join" && (
+            <div className={`code-field ${mode === "join" ? "code-field-open" : ""}`}>
               <label>
                 <span>朋友給你的六位代碼</span>
                 <input
@@ -2378,10 +2699,11 @@ export default function Home() {
                     )
                   }
                   placeholder="例如：YAZY88"
+                  tabIndex={mode === "join" ? 0 : -1}
                   value={joinCode}
                 />
               </label>
-            )}
+            </div>
 
             {error && <p className="form-error">{error}</p>}
             <button
@@ -2437,6 +2759,33 @@ export default function Home() {
       )}
 
       <section className="history-section">
+        {stats.games > 0 && (
+          <>
+            <h2>
+              你的戰績
+              {account && (
+                <button
+                  className="history-more"
+                  onClick={() => {
+                    setProfileTab("record");
+                    setAccountPanelOpen(true);
+                  }}
+                  type="button"
+                >
+                  看全部
+                </button>
+              )}
+            </h2>
+            <div className="history-stats">
+              <article><strong>{stats.games}</strong><span>場次</span></article>
+              <article><strong>{stats.winRate}%</strong><span>勝率</span></article>
+              <article><strong>{stats.bestScore}</strong><span>最高分</span></article>
+              <article><strong>{stats.averageScore}</strong><span>平均分</span></article>
+              <article><strong>{stats.yazyRate}%</strong><span>YAZY 率</span></article>
+            </div>
+          </>
+        )}
+        {account && <p className="record-note">統計最近 200 場完成對局</p>}
         <h2>上次的桌</h2>
         {!historyLoaded ? (
           <p className="history-empty">正在翻上次的桌…</p>
@@ -2445,19 +2794,17 @@ export default function Home() {
         ) : (
           <div className="history-list">
             {history.slice(0, 4).map((game) => {
-              const sorted = [...game.players].sort(
-                (a, b) =>
-                  scoreSummary(b.scores).total - scoreSummary(a.scores).total,
-              );
+              const result = readGame(game);
               return (
                 <article key={`${game.code}-${game.finishedAt}`}>
-                  <strong>{sorted[0]?.name} 最高分</strong>
+                  <strong>
+                    {result.mine
+                      ? `第 ${result.place} 名 · ${result.mine.total} 分`
+                      : `${result.winner?.name} 獲勝`}
+                  </strong>
                   <b>
-                    {scoreSummary(sorted[0]?.scores ?? []).total} ·{" "}
-                    {new Intl.DateTimeFormat("zh-TW", {
-                      month: "long",
-                      day: "numeric",
-                    }).format(new Date(game.finishedAt))}
+                    {result.mine ? `勝者 ${result.winner?.total} 分` : result.winner?.total} ·{" "}
+                    {historyDate.format(new Date(game.finishedAt))}
                   </b>
                 </article>
               );

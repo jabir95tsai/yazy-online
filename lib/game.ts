@@ -78,6 +78,30 @@ export function scoreDice(category: CategoryId, dice: number[]) {
   return 0;
 }
 
+// At equal total gain, prefer combinations over face totals and save Chance.
+const recommendationOrder: readonly CategoryId[] = [
+  "yazy", "largeStraight", "smallStraight", "fullHouse", "fourKind", "threeKind",
+  "sixes", "fives", "fours", "threes", "twos", "ones", "chance",
+];
+
+export function recommendScore(
+  previews: ReadonlyMap<CategoryId, number>,
+  entries: Array<{ category: string; score: number }>,
+) {
+  const filled = new Set(entries.map((entry) => entry.category));
+  const currentTotal = scoreSummary(entries).total;
+  let best: { id: CategoryId; score: number; gain: number; bonusGain: number } | null = null;
+  for (const id of recommendationOrder) {
+    const score = previews.get(id);
+    if (filled.has(id) || score === undefined || score <= 0) continue;
+    const gain = scoreSummary([...entries, { category: id, score }]).total - currentTotal;
+    if (!best || gain > best.gain) {
+      best = { id, score, gain, bonusGain: gain - score };
+    }
+  }
+  return best;
+}
+
 export function scoreSummary(entries: Array<{ category: string; score: number }>) {
   const upper = entries
     .filter((entry) => categoryIds.slice(0, 6).includes(entry.category as CategoryId))

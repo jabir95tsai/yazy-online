@@ -2,15 +2,21 @@ import { eq } from "drizzle-orm";
 import { ensureSchema, getDb } from "@/db";
 import { users } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
-import { historyStats, loadUserHistory } from "@/lib/history";
+import { HISTORY_LIMIT, historyStats, loadUserHistory } from "@/lib/history";
 import { apiError, cleanName } from "@/lib/server";
 
 export async function GET(request: Request) {
   try {
     const user = await getCurrentUser(request);
     if (!user) return Response.json({ error: "尚未登入。" }, { status: 401 });
+    // Stats look further back than the list shows, so the win rate and the
+    // averages are not thrown off by whichever games happen to be recent.
     const games = await loadUserHistory(user.id);
-    return Response.json({ user, stats: historyStats(games), games });
+    return Response.json({
+      user,
+      stats: historyStats(games, user.id),
+      games: games.slice(0, HISTORY_LIMIT),
+    });
   } catch (error) {
     return apiError(error);
   }
