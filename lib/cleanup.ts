@@ -35,14 +35,14 @@ export async function cleanupExpiredSessions(d1: D1Database) {
  */
 export async function cleanupAbandonedRooms(d1: D1Database, now = Date.now()) {
   const cutoff = abandonedRoomCutoff(now);
-  const doomed = "SELECT id FROM rooms WHERE status != 'finished' AND updated_at <= ?";
+  const doomed = "SELECT id FROM rooms WHERE status != 'finished' AND updated_at <= ? AND NOT EXISTS (SELECT 1 FROM room_games WHERE room_id = rooms.id)";
 
   const [, scores, players, rooms] = await d1.batch([
     d1.prepare(`DELETE FROM room_invites WHERE room_id IN (${doomed})`).bind(cutoff),
     d1.prepare(`DELETE FROM scores WHERE room_id IN (${doomed})`).bind(cutoff),
     d1.prepare(`DELETE FROM players WHERE room_id IN (${doomed})`).bind(cutoff),
     d1
-      .prepare("DELETE FROM rooms WHERE status != 'finished' AND updated_at <= ?")
+      .prepare(`DELETE FROM rooms WHERE id IN (${doomed})`)
       .bind(cutoff),
   ]);
 

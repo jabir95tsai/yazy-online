@@ -7,6 +7,15 @@ import {
   type BrowserSession,
 } from "../lib/browser-session.ts";
 import { abandonedRoomCutoff } from "../lib/cleanup.ts";
+import { formatHistoryDate } from "../lib/history-date.ts";
+
+test("history dates support extended room timestamps and invalid legacy values", () => {
+  const standard = "2026-09-26T12:00:00.123Z";
+  const extended = "2026-09-26T12:00:00.1231234567890123456789012345678901234567890Z";
+  assert.equal(formatHistoryDate(extended), formatHistoryDate(standard));
+  assert.equal(formatHistoryDate("not-a-date"), "日期不明");
+  assert.equal(formatHistoryDate(""), "日期不明");
+});
 import { maximumFinalScore, resolveMatch, type MatchPlayer } from "../lib/match.ts";
 import { categoryIds, fairDieFromByte, recommendScore, scoreDice, scoreSummary } from "../lib/game.ts";
 import {

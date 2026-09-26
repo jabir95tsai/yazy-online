@@ -38,7 +38,7 @@ node tests/browser-regression.mjs
 `PLAYWRIGHT_MODULE` 可指定外部 Playwright 的 `index.mjs` 絕對路徑。
 測試會建立本機測試帳號與對局，拒絕對正式網址執行，截圖寫入忽略的 `outputs/`。
 
-帳號統計與好友對戰紀錄採最近 200 場已完成對局，列表顯示最近 20 場。
+帳號統計與好友對戰紀錄採歷史所有已完成對局，列表顯示最近 20 場。
 首頁背景更新只查詢房間邀請；開啟帳號面板時重新讀取好友戰績。
 大量 ID 查詢透過單一 JSON 參數及 SQLite `json_each`，避免超過 D1 的參數上限。
 

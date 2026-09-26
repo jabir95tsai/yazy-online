@@ -107,6 +107,9 @@ export function ensureSchema() {
             created_at TEXT NOT NULL
           )
         `),
+        d1.prepare(`CREATE TABLE IF NOT EXISTS room_games (
+          room_id TEXT NOT NULL REFERENCES rooms(id), finished_at TEXT NOT NULL,
+          game_json TEXT NOT NULL, PRIMARY KEY (room_id, finished_at))`),
         d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS rooms_code_unique ON rooms(code)"),
         d1.prepare("CREATE UNIQUE INDEX IF NOT EXISTS players_room_seat_unique ON players(room_id, seat)"),
         d1.prepare("CREATE INDEX IF NOT EXISTS players_room_idx ON players(room_id)"),

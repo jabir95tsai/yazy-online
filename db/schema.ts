@@ -54,6 +54,12 @@ export const rooms = sqliteTable(
   (table) => [uniqueIndex("rooms_code_unique").on(table.code)],
 );
 
+export const roomGames = sqliteTable("room_games", {
+  roomId: text("room_id").notNull().references(() => rooms.id),
+  finishedAt: text("finished_at").notNull(),
+  gameJson: text("game_json").notNull(),
+}, (table) => [primaryKey({ columns: [table.roomId, table.finishedAt] })]);
+
 export const players = sqliteTable(
   "players",
   {

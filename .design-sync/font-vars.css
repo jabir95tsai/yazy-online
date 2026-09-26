@@ -1,0 +1,5 @@
+/* next/font sets this variable on <html> in the app; designs need it defined
+   globally or globals.css's font-family falls back to the browser default. */
+:root {
+  --font-geist-sans: "Geist";
+}

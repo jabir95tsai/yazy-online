@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -10,22 +9,17 @@ import {
 } from "react";
 import {
   dieProfile,
-  PIP_RADIUS,
   REDUCED_THROW_MS,
   renderReduced,
   renderResting,
   renderThrow,
   scheduleContact,
-  SHADOW_CORE,
-  SHADOW_GLOW,
-  SLOT_POSITIONS,
-  SPRITE_SIZE,
   throwFinished,
-  type DieRender,
   type Throw,
 } from "@/lib/dice-animation";
 import {
   categories,
+  fairDieFromByte,
   recommendScore,
   scoreDice,
   scoreSummary,
@@ -44,12 +38,26 @@ import {
   upsertBrowserSession,
   type BrowserSession as Session,
 } from "@/lib/browser-session";
-import { resultValue, maximumFinalScore, type SurrenderReason } from "@/lib/match";
+import { resultValue, type SurrenderReason } from "@/lib/match";
 import { Modal } from "./components/modal";
+import { Avatar } from "./components/avatar";
+import { Brand } from "./components/brand";
+import { Button } from "./components/button";
+import { DiceTray, Die, HeroTray, StillDie, type DieSpriteHandle } from "./components/die";
+import { ErrorBanner, FormError, LiveDot, RecordNote } from "./components/feedback";
+import { FriendAction, FriendActions, FriendRow, HeadToHead } from "./components/friend-row";
+import { LobbySeats, PlayerChip, Podium, Seat } from "./components/players";
+import { RoomCode } from "./components/room-code";
+import { BonusRow, ScoreRow } from "./components/score-row";
+import { StatGrid } from "./components/stat-grid";
+import { SegmentedTabs } from "./components/tabs";
+import { TurnCountdown } from "./components/turn-countdown";
 import { RequestScope } from "@/lib/request-scope";
+import { formatHistoryDate } from "@/lib/history-date";
 
 type RoomState = {
   room: {
+    practice?: boolean;
     id: string;
     code: string;
     status: "waiting" | "playing" | "finished";
@@ -64,7 +72,7 @@ type RoomState = {
     updatedAt: string;
     finishedAt: string | null;
   };
-  players: Array<{ id: string; name: string; seat: number; surrenderReason: SurrenderReason }>;
+  players: Array<{ id: string; userId: string | null; name: string; seat: number; surrenderReason: SurrenderReason }>;
   scores: Array<{ playerId: string; category: string; score: number }>;
 };
 
@@ -152,10 +160,6 @@ const NO_FRIENDS: FriendsPayload = {
  */
 const blankThrowFace = (index: number) => ((index * 2 + 1) % 6) + 1;
 
-const historyDate = new Intl.DateTimeFormat("zh-TW", {
-  month: "long",
-  day: "numeric",
-});
 
 /**
  * One finished game read as a result: who won it, where you came, and whether
@@ -180,271 +184,6 @@ function readGame(game: HistoryGame) {
 /** How far apart the dice come down, so they land as a run rather than a slab. */
 const DIE_SETTLE_STAGGER = 80;
 const ROLL_SAFETY_TIMEOUT = 5_000;
-/** Shared by all five sprites: the shadow is the same gradient under each. */
-const SHADOW_GLOW_ID = "yazy-die-shadow-glow";
-const SHADOW_CORE_ID = "yazy-die-shadow-core";
-
-/**
- * The die-and-wordmark in the header. Same three-face isometric die as the
- * roll tray, drawn plain (no shared defs/ids) since it's the only instance
- * mounted at a time across the three header variants.
- */
-function BrandMark() {
-  return (
-    <svg
-      className="brand-mark"
-      viewBox="0 0 104 120"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <polygon points="51.96,0 103.92,30 51.96,60 0,30" fill="#e8a06a" />
-      <polygon points="51.96,60 103.92,30 103.92,90 51.96,120" fill="#d4864b" />
-      <polygon points="0,30 51.96,60 51.96,120 0,90" fill="#b96e37" />
-      <g fill="#fffdf9">
-        <g transform="matrix(51.96,30,-51.96,30,51.96,0)">
-          <circle cx="0.28" cy="0.28" r="0.105" />
-          <circle cx="0.72" cy="0.28" r="0.105" />
-          <circle cx="0.5" cy="0.5" r="0.105" />
-          <circle cx="0.28" cy="0.72" r="0.105" />
-          <circle cx="0.72" cy="0.72" r="0.105" />
-        </g>
-        <g opacity="0.92" transform="matrix(51.96,30,0,60,0,30)">
-          <circle cx="0.5" cy="0.5" r="0.105" />
-        </g>
-        <g opacity="0.92" transform="matrix(51.96,-30,0,60,51.96,60)">
-          <circle cx="0.28" cy="0.28" r="0.105" />
-          <circle cx="0.5" cy="0.5" r="0.105" />
-          <circle cx="0.72" cy="0.72" r="0.105" />
-        </g>
-      </g>
-    </svg>
-  );
-}
-
-/**
- * The two shadow gradients, rendered once for the whole tray. `url(#id)`
- * resolves document-wide, so five sprites can share one pair rather than
- * carrying their own copies.
- */
-function DiceShadowDefs() {
-  return (
-    <svg aria-hidden="true" className="dice-defs" focusable="false">
-      <defs>
-        <radialGradient id={SHADOW_GLOW_ID}>
-          <stop offset="0%" stopColor="#fff" stopOpacity="0.1" />
-          <stop offset="60%" stopColor="#fff" stopOpacity="0.04" />
-          <stop offset="100%" stopColor="#fff" stopOpacity="0" />
-        </radialGradient>
-        <radialGradient id={SHADOW_CORE_ID}>
-          <stop offset="0%" stopColor="#0a1424" stopOpacity="0.44" />
-          <stop offset="55%" stopColor="#0a1424" stopOpacity="0.17" />
-          <stop offset="100%" stopColor="#0a1424" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-    </svg>
-  );
-}
-
-/** What the roll loop drives a sprite through, once per frame. */
-type DieSpriteHandle = { apply: (frame: DieRender) => void };
-
-/**
- * One die, as three shaded quads and their pips.
- *
- * While a die is in flight the frame loop writes straight to these nodes and
- * React is told to leave the sprite alone (see the `memo` comparison below).
- * Two reasons. A roll re-renders the board every time the room state is polled,
- * and re-rendering five dice mid-throw is exactly the work the throw does not
- * have; and `value` is the *server's* number, which arrives while the die is
- * still in the air — letting React paint it would flip the die in full view
- * instead of at the hand-off. Nothing is lost by holding React off: the last
- * frame of a throw is the resting pose for the same value React would draw.
- */
-const DieSprite = memo(
-  // `animating` is deliberately not destructured: it is read only by the
-  // comparison at the bottom, which is the whole point of it.
-  function DieSprite({
-    value,
-    register,
-  }: {
-    value: number;
-    animating: boolean;
-    register: (handle: DieSpriteHandle | null) => void;
-  }) {
-    const frame = renderResting(value);
-    const dieRef = useRef<SVGGElement | null>(null);
-    const shadowRef = useRef<SVGGElement | null>(null);
-    const quadRefs = useRef<(SVGPolygonElement | null)[]>([]);
-    const gridRefs = useRef<(SVGGElement | null)[]>([]);
-    const pipRefs = useRef<(SVGCircleElement | null)[][]>([[], [], []]);
-
-    const apply = useCallback((next: DieRender) => {
-      dieRef.current?.setAttribute("transform", next.transform);
-      shadowRef.current?.setAttribute("transform", next.shadowTransform);
-      shadowRef.current?.setAttribute("opacity", `${next.shadowOpacity}`);
-      next.faces.forEach((face, index) => {
-        const quad = quadRefs.current[index];
-        if (quad) {
-          quad.setAttribute("points", face.points);
-          quad.setAttribute("fill", face.fill);
-        }
-        const grid = gridRefs.current[index];
-        if (grid) {
-          grid.setAttribute("transform", `matrix(${face.matrix})`);
-          grid.setAttribute("opacity", `${face.shade}`);
-        }
-        face.pips.forEach((opacity, slot) => {
-          pipRefs.current[index][slot]?.setAttribute("opacity", `${opacity}`);
-        });
-      });
-    }, []);
-
-    useEffect(() => {
-      register({ apply });
-      return () => register(null);
-    }, [apply, register]);
-
-    return (
-      <svg
-        aria-hidden="true"
-        className="die-sprite"
-        focusable="false"
-        viewBox={`0 0 ${SPRITE_SIZE} ${SPRITE_SIZE}`}
-      >
-        <g opacity={frame.shadowOpacity} ref={shadowRef} transform={frame.shadowTransform}>
-          <ellipse
-            fill={`url(#${SHADOW_GLOW_ID})`}
-            rx={SHADOW_GLOW.rx}
-            ry={SHADOW_GLOW.ry}
-          />
-          <ellipse
-            fill={`url(#${SHADOW_CORE_ID})`}
-            rx={SHADOW_CORE.rx}
-            ry={SHADOW_CORE.ry}
-          />
-        </g>
-        <g ref={dieRef} transform={frame.transform}>
-          {/* Back to front: face 0 is the one squarest to the camera. */}
-          <g className="die-shell">
-            {[2, 1, 0].map((index) => (
-              <polygon
-                fill={frame.faces[index].fill}
-                key={index}
-                points={frame.faces[index].points}
-                ref={(node) => {
-                  quadRefs.current[index] = node;
-                }}
-              />
-            ))}
-          </g>
-          <g className="die-pips">
-            {[0, 1, 2].map((index) => (
-              <g
-                key={index}
-                opacity={frame.faces[index].shade}
-                ref={(node) => {
-                  gridRefs.current[index] = node;
-                }}
-                transform={`matrix(${frame.faces[index].matrix})`}
-              >
-                {SLOT_POSITIONS.map((slot, position) => (
-                  <circle
-                    cx={slot.cx}
-                    cy={slot.cy}
-                    key={position}
-                    opacity={frame.faces[index].pips[position]}
-                    r={PIP_RADIUS}
-                    ref={(node) => {
-                      pipRefs.current[index][position] = node;
-                    }}
-                  />
-                ))}
-              </g>
-            ))}
-          </g>
-        </g>
-      </svg>
-    );
-  },
-  (previous, next) =>
-    previous.animating && next.animating
-      ? true
-      : previous.animating === next.animating &&
-        previous.value === next.value &&
-        previous.register === next.register,
-);
-
-/**
- * A die that never moves: the same sprite the tray uses, drawn once in its
- * resting pose. `register` is a module constant so the `memo` comparison below
- * sees a stable prop and never re-renders these.
- */
-const NO_SPRITE_HANDLE = () => {};
-
-function StillDie({ value }: { value: number }) {
-  return (
-    <span className="die-still">
-      <DieSprite animating={false} register={NO_SPRITE_HANDLE} value={value} />
-    </span>
-  );
-}
-
-/**
- * The turn clock, shown only once it has actually run out.
- *
- * The server still expires a turn after 90s so a table isn't held hostage by
- * someone who closed the tab, but a visible countdown is the one thing this
- * design does not want on screen. So the clock ticks in here and stays silent
- * until the deadline passes, at which point the others are offered the skip.
- *
- * Owns its own 1s tick locally instead of lifting it into `Home` state, so the
- * tick does not re-render the score panel, player strip and dice tray along
- * with it — those don't depend on the clock, and re-rendering them every second
- * competed with the roll animation for main-thread time.
- *
- * The caller keys this on `turnDeadline` so a new turn remounts it and
- * `now` starts fresh from the lazy `useState` initializer, rather than this
- * component reading `Date.now()` mid-render to reset an existing clock —
- * that would make render impure.
- */
-function TurnCountdown({
-  turnDeadline,
-  isMyTurn,
-  currentPlayerName,
-  busy,
-  onSkip,
-}: {
-  turnDeadline: string;
-  isMyTurn: boolean;
-  currentPlayerName: string;
-  busy: boolean;
-  onSkip: () => void;
-}) {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  if (Date.parse(turnDeadline) > now) return null;
-
-  return (
-    <div className="turn-timeout">
-      <span>
-        {isMyTurn
-          ? "你離開有點久了，別人可以先跳過你"
-          : `${currentPlayerName}好像離開了`}
-      </span>
-      {!isMyTurn && (
-        <button disabled={busy} onClick={onSkip} type="button">
-          跳過這個回合
-        </button>
-      )}
-    </div>
-  );
-}
-
 function readSessions(): Session[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "[]");
@@ -488,6 +227,8 @@ export default function Home() {
   /** Narrow screens show the first six rows until this is opened. */
   const [scoreExpanded, setScoreExpanded] = useState(false);
   const [confirmSurrender, setConfirmSurrender] = useState(false);
+  const [tableMenuOpen, setTableMenuOpen] = useState(false);
+  const tableMenuRef = useRef<HTMLDivElement | null>(null);
   const [showFinalCards, setShowFinalCards] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -513,6 +254,7 @@ export default function Home() {
   const [authPassword, setAuthPassword] = useState("");
   const [authDisplayName, setAuthDisplayName] = useState("");
   const [profileName, setProfileName] = useState("");
+  const profileNameDirty = useRef(false);
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountError, setAccountError] = useState("");
   const [initialized, setInitialized] = useState(false);
@@ -899,8 +641,8 @@ export default function Home() {
     if (!accountScope.current.accepts(signal)) return true;
     setAccount(next.user);
     setProfile(next);
-    setName(next.user.displayName);
-    setProfileName(next.user.displayName);
+    setName((current) => current || next.user.displayName);
+    if (!profileNameDirty.current) setProfileName(next.user.displayName);
     setHistory(next.games ?? []);
     void loadFriends();
     return true;
@@ -965,8 +707,13 @@ export default function Home() {
       }
       roomEtagRef.current = response.headers.get("etag");
       const turnChanged =
+        previous?.room.status !== next.room.status ||
         previous?.room.currentSeat !== next.room.currentSeat ||
         previous?.room.round !== next.room.round;
+      if (previous?.room.status === "finished" && next.room.status === "playing") {
+        setShowFinalCards(false);
+        setConfirmSurrender(false);
+      }
       const newRoll =
         Boolean(previous) &&
         !turnChanged &&
@@ -1055,9 +802,8 @@ export default function Home() {
   }, [account, loadInvites, session]);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || state?.room.practice) return;
     const status = state?.room.status;
-    if (status === "finished") return;
     let timer: number | null = null;
     let stopped = false;
     let reading = false;
@@ -1070,7 +816,7 @@ export default function Home() {
     const schedule = () => {
       if (timer !== null) window.clearTimeout(timer);
       const interval =
-        document.visibilityState === "hidden" ? 15_000 : status === "waiting" ? 4_000 : 1_500;
+        document.visibilityState === "hidden" ? 15_000 : status !== "playing" ? 4_000 : 1_500;
       timer = window.setTimeout(() => void poll(), interval);
     };
     const onVisibilityChange = () => {
@@ -1084,7 +830,7 @@ export default function Home() {
       if (timer !== null) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [fetchRoom, session, state?.room.status]);
+  }, [fetchRoom, session, state?.room.status, state?.room.practice]);
 
   useEffect(
     () => () => {
@@ -1105,8 +851,26 @@ export default function Home() {
   const isMyTurn =
     state?.room.status === "playing" && currentPlayer?.id === session?.playerId;
   const activePlayers = state?.players.filter((player) => !player.surrenderReason) ?? [];
-  const soleSurvivor = activePlayers.length === 1 ? activePlayers[0] : null;
+  const soleSurvivor = !state?.room.practice && activePlayers.length === 1 ? activePlayers[0] : null;
+  const canSurrender =
+    state?.room.status === "playing" && !state.room.practice && !soleSurvivor && !me?.surrenderReason;
   const rolling = diceInFlight.some(Boolean);
+
+  useEffect(() => {
+    if (!tableMenuOpen) return;
+    const onDown = (event: PointerEvent) => {
+      if (!tableMenuRef.current?.contains(event.target as Node)) setTableMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setTableMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [tableMenuOpen]);
   // Syncs from an external timer-driven animation, not from React state or
   // props, so there is no way to compute this during render.
   useEffect(() => {
@@ -1192,6 +956,65 @@ export default function Home() {
     [scoreSummaries, state],
   );
 
+  function enterPractice() {
+    roomScope.current.reset();
+    resetRollAnimation();
+    const now = new Date().toISOString();
+    const practiceSession: Session = { code: "PRACTICE", playerId: "practice", token: "", name: name.trim() || "練習玩家" };
+    const next: RoomState = {
+      room: { practice: true, id: "practice", code: practiceSession.code, status: "playing",
+        hostPlayerId: practiceSession.playerId, currentSeat: 0, round: 1, dice: [],
+        held: [false, false, false, false, false], rollsUsed: 0, turnDeadline: null,
+        createdAt: now, updatedAt: now, finishedAt: null },
+      players: [{ id: practiceSession.playerId, userId: null, name: practiceSession.name, seat: 0, surrenderReason: null }],
+      scores: [],
+    };
+    stateRef.current = next;
+    heldRef.current = next.room.held;
+    setHeld(next.room.held);
+    setSettledDice([]);
+    setState(next);
+    setSession(practiceSession);
+    setScorePlayerId(practiceSession.playerId);
+    setShowFinalCards(false);
+    setError("");
+    setTableMenuOpen(false);
+    roomEtagRef.current = null;
+    window.history.replaceState({}, "", window.location.pathname);
+  }
+
+  function practiceAction(actionName: string, category?: CategoryId) {
+    const current = stateRef.current;
+    if (!current?.room.practice || rollAnimationActiveRef.current) return;
+    if (actionName === "restart") { enterPractice(); return; }
+    if (current.room.status !== "playing") return;
+    let next = current;
+    if (actionName === "roll" && current.room.rollsUsed < 3) {
+      const byte = new Uint8Array(1);
+      const dice = Array.from({ length: 5 }, (_, index) => {
+        if (heldRef.current[index]) return current.room.dice[index];
+        let face: number | null = null;
+        while (face === null) { crypto.getRandomValues(byte); face = fairDieFromByte(byte[0]); }
+        return face;
+      });
+      startRollAnimation(heldRef.current, true);
+      next = { ...current, room: { ...current.room, dice, held: [...heldRef.current], rollsUsed: current.room.rollsUsed + 1 } };
+      revealRollResult(next.room.held, dice);
+    } else if (actionName === "score" && category && current.room.rollsUsed > 0 &&
+      !current.scores.some(score => score.category === category)) {
+      const scores = [...current.scores, { playerId: "practice", category, score: scoreDice(category, current.room.dice) }];
+      const finished = scores.length === categories.length;
+      const held = [false, false, false, false, false];
+      heldRef.current = held;
+      setHeld(held);
+      next = { ...current, scores, room: { ...current.room, dice: [], held, rollsUsed: 0,
+        round: Math.min(13, scores.length + 1), status: finished ? "finished" : "playing",
+        finishedAt: finished ? new Date().toISOString() : null } };
+    } else return;
+    stateRef.current = next;
+    setState(next);
+  }
+
   // `inviteCode` is for tables arrived at from a friend's invitation, where
   // the code was never typed into the join field.
   async function enterRoom(kind: "create" | "join", inviteCode?: string) {
@@ -1272,6 +1095,7 @@ export default function Home() {
       accountScope.current.reset();
       setName(data.user.displayName);
       setProfileName(data.user.displayName);
+      profileNameDirty.current = false;
       setAuthPassword("");
       await refreshProfile();
     } catch {
@@ -1290,12 +1114,18 @@ export default function Home() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ displayName: profileName }),
       });
-      const data = (await response.json()) as { error?: string };
+      const data = (await response.json()) as { error?: string; user?: AccountProfile["user"] };
       if (!response.ok) {
         setAccountError(data.error ?? "無法更新個人資料。");
         return;
       }
-      await refreshProfile();
+      if (data.user) {
+        const updatedUser = data.user;
+        profileNameDirty.current = false;
+        setAccount(updatedUser);
+        setProfile((current) => current ? { ...current, user: updatedUser } : current);
+        setProfileName(updatedUser.displayName);
+      }
     } catch {
       setAccountError("連線失敗，請再試一次。");
     } finally {
@@ -1418,6 +1248,7 @@ export default function Home() {
       setProfile(null);
       setFriends(NO_FRIENDS);
       setAccountPanelOpen(false);
+      profileNameDirty.current = false;
       setHistory([]);
       setHistoryLoaded(true);
       setName("");
@@ -1429,21 +1260,24 @@ export default function Home() {
   }
 
   async function action(
-    actionName: "start" | "roll" | "score" | "skip" | "surrender" | "finish",
+    actionName: "start" | "restart" | "roll" | "score" | "skip" | "surrender" | "finish",
     category?: CategoryId,
   ) {
     if (!session || !stateRef.current || actionBusyRef.current) return;
+    if (stateRef.current.room.practice) { practiceAction(actionName, category); return; }
     const signal = roomScope.current.signal;
     actionBusyRef.current = true;
     setBusy(true);
     setError("");
     try {
       if (actionName === "roll") {
+        startRollAnimation(heldRef.current, true);
         // The server decides which dice survive from `rooms.held_json`, so a
         // hold still inside its debounce window has to be stored before the
         // reroll. Rolling anyway would silently reroll a die the player had
         // already clicked to keep, so a failed sync aborts the roll instead.
         if (!(await flushPendingHold())) {
+          resetRollAnimation();
           setError("鎖骰狀態尚未同步，請再按一次擲骰。");
           return;
         }
@@ -1453,7 +1287,6 @@ export default function Home() {
         await discardPendingHold();
       }
       if (!roomScope.current.accepts(signal)) return;
-      if (actionName === "roll") startRollAnimation(heldRef.current, true);
 
       let response: Response | null = null;
       let data: { error?: string } = {};
@@ -1535,6 +1368,7 @@ export default function Home() {
     );
     heldRef.current = nextHeld;
     setHeld(nextHeld);
+    if (currentState.room.practice) return;
     pendingHoldRef.current = nextHeld;
     if (holdSyncTimer.current !== null) {
       window.clearTimeout(holdSyncTimer.current);
@@ -1790,69 +1624,58 @@ export default function Home() {
         {account && profile ? (
           <>
             <div className="profile-heading">
-              <span className="profile-avatar">{account.displayName.slice(0, 1).toUpperCase()}</span>
+              <Avatar name={account.displayName} size="lg" />
               <div>
                 <h2>{account.displayName}</h2>
                 <small>@{account.username}</small>
               </div>
             </div>
-            <div className="auth-tabs">
-              <button
-                className={profileTab === "profile" ? "active" : ""}
-                onClick={() => setProfileTab("profile")}
-                type="button"
-              >個人資料</button>
-              <button
-                className={profileTab === "record" ? "active" : ""}
-                onClick={() => setProfileTab("record")}
-                type="button"
-              >戰績</button>
-              <button
-                className={profileTab === "friends" ? "active" : ""}
-                onClick={() => setProfileTab("friends")}
-                type="button"
-              >
-                好友
-                {friends.incoming.length > 0 && (
-                  <b className="tab-badge">{friends.incoming.length}</b>
-                )}
-              </button>
-            </div>
+            <SegmentedTabs
+              items={[
+                { id: "profile", label: "個人資料" },
+                { id: "record", label: "戰績" },
+                { id: "friends", label: "好友", badge: friends.incoming.length },
+              ]}
+              onChange={setProfileTab}
+              value={profileTab}
+            />
             {profileTab === "profile" ? (
               <>
-                <p className="record-note">統計最近 200 場完成對局</p>
-                <div className="profile-stats">
-                  <article><strong>{profile.stats.games}</strong><span>完成場次</span></article>
-                  <article><strong>{profile.stats.wins}</strong><span>勝場</span></article>
-                  <article><strong>{profile.stats.bestScore}</strong><span>最高分</span></article>
-                  <article><strong>{profile.stats.averageScore}</strong><span>平均分</span></article>
-                </div>
+                <RecordNote>統計歷史所有已完成對局</RecordNote>
+                <StatGrid
+                  stats={[
+                    { label: "完成場次", value: profile.stats.games },
+                    { label: "勝場", value: profile.stats.wins },
+                    { label: "最高分", value: profile.stats.bestScore },
+                    { label: "平均分", value: profile.stats.averageScore },
+                  ]}
+                />
                 <label className="profile-field">
                   <span>你想用什麼名字</span>
                   <input
                     maxLength={18}
-                    onChange={(event) => setProfileName(event.target.value)}
+                    onChange={(event) => {
+                      profileNameDirty.current = true;
+                      setProfileName(event.target.value);
+                    }}
                     value={profileName}
                   />
                 </label>
-                {accountError && <p className="form-error">{accountError}</p>}
+                {accountError && <FormError>{accountError}</FormError>}
                 <div className="profile-actions">
-                  <button
-                    className="primary-action"
+                  <Button
                     disabled={accountBusy || profileName.trim() === account.displayName}
                     onClick={saveProfile}
-                    type="button"
                   >
                     儲存個人資料
-                  </button>
-                  <button
-                    className="text-action"
+                  </Button>
+                  <Button
                     disabled={accountBusy}
                     onClick={logoutAccount}
-                    type="button"
+                    variant="text"
                   >
                     登出
-                  </button>
+                  </Button>
                 </div>
                 <p className="profile-since">
                   加入日期：{new Intl.DateTimeFormat("zh-TW", { dateStyle: "medium" }).format(new Date(account.createdAt))}
@@ -1860,26 +1683,26 @@ export default function Home() {
               </>
             ) : profileTab === "record" ? (
               <div className="record-block">
-                <p className="record-note">個人與好友對戰統計以你最近 200 場完成對局為準。</p>
-                <div className="profile-stats trio">
-                  <article><strong>{stats.games}</strong><span>完成場次</span></article>
-                  <article><strong>{stats.winRate}%</strong><span>勝率</span></article>
-                  <article>
-                    <strong>{stats.wins}<i>/{stats.contested}</i></strong>
-                    <span>勝場</span>
-                  </article>
-                  <article><strong>{stats.bestScore}</strong><span>最高分</span></article>
-                  <article><strong>{stats.averageScore}</strong><span>平均分</span></article>
-                  <article><strong>{stats.yazyRate}%</strong><span>YAZY 率</span></article>
-                </div>
+                <RecordNote>個人與好友對戰統計以你歷史所有已完成對局為準。</RecordNote>
+                <StatGrid
+                  stats={[
+                    { label: "完成場次", value: stats.games },
+                    { label: "勝率", value: `${stats.winRate}%` },
+                    { label: "勝場", value: stats.wins, of: stats.contested },
+                    { label: "最高分", value: stats.bestScore },
+                    { label: "平均分", value: stats.averageScore },
+                    { label: "YAZY 率", value: `${stats.yazyRate}%` },
+                  ]}
+                  variant="record"
+                />
                 {stats.games === 0 ? (
                   <p className="friend-empty">還沒有打完的場次。玩完一桌就有了。</p>
                 ) : (
-                  <p className="record-note">
+                  <RecordNote>
                     打出過 {stats.yazy} 次 YAZY
                     {stats.contested > 0 &&
                       ` · 對戰 ${stats.contested} 場，敗 ${stats.losses}${stats.ties > 0 ? `，和 ${stats.ties}` : ""}`}
-                  </p>
+                  </RecordNote>
                 )}
 
                 <div className="friend-group">
@@ -1890,27 +1713,22 @@ export default function Home() {
                     </p>
                   ) : (
                     rivals.map((friend) => (
-                      <article className="friend-row" key={friend.friendshipId}>
-                        <span className="avatar">
-                          {friend.displayName.slice(0, 1).toUpperCase()}
-                        </span>
-                        <div className="friend-copy">
-                          <strong>{friend.displayName}</strong>
-                          <small>
+                      <FriendRow
+                        detail={
+                          <>
                             一起 {friend.record?.games} 場 · 平均 {friend.record?.myAverage} 比{" "}
                             {friend.record?.theirAverage}
-                          </small>
-                        </div>
-                        <div className="versus-record">
-                          <b>{friend.record?.wins}</b>勝
-                          <b>{friend.record?.losses}</b>敗
-                          {(friend.record?.ties ?? 0) > 0 && (
-                            <>
-                              <b>{friend.record?.ties}</b>和
-                            </>
-                          )}
-                        </div>
-                      </article>
+                          </>
+                        }
+                        key={friend.friendshipId}
+                        name={friend.displayName}
+                      >
+                        <HeadToHead
+                          losses={friend.record?.losses ?? 0}
+                          ties={friend.record?.ties ?? 0}
+                          wins={friend.record?.wins ?? 0}
+                        />
+                      </FriendRow>
                     ))
                   )}
                 </div>
@@ -1931,7 +1749,7 @@ export default function Home() {
                               {result.yazy && <i className="record-yazy">YAZY</i>}
                             </strong>
                             <small>
-                              {historyDate.format(new Date(game.finishedAt))} ·{" "}
+                              {formatHistoryDate(game.finishedAt)} ·{" "}
                               {result.lines.length} 人 · 勝者 {result.winner?.total} 分
                             </small>
                           </div>
@@ -1959,49 +1777,42 @@ export default function Home() {
                       value={friendUsername}
                     />
                   </label>
-                  <button
-                    className="primary-action"
+                  <Button
                     disabled={friendBusy || friendUsername.length < 3}
                     onClick={addFriend}
-                    type="button"
                   >
                     {friendBusy ? "請稍候…" : "送出邀請"}
-                  </button>
+                  </Button>
                 </div>
-                {friendError && <p className="form-error">{friendError}</p>}
+                {friendError && <FormError>{friendError}</FormError>}
                 {friendNote && <p className="friend-note">{friendNote}</p>}
 
                 {friends.incoming.length > 0 && (
                   <div className="friend-group">
                     <h3>等你回覆</h3>
                     {friends.incoming.map((person) => (
-                      <article className="friend-row" key={person.friendshipId}>
-                        <span className="avatar">
-                          {person.displayName.slice(0, 1).toUpperCase()}
-                        </span>
-                        <div className="friend-copy">
-                          <strong>{person.displayName}</strong>
-                          <small>@{person.username}</small>
-                        </div>
-                        <div className="friend-actions">
-                          <button
-                            className="friend-yes"
+                      <FriendRow
+                        detail={`@${person.username}`}
+                        key={person.friendshipId}
+                        name={person.displayName}
+                      >
+                        <FriendActions>
+                          <FriendAction
                             disabled={friendBusy}
                             onClick={() => respondToFriend(person.friendshipId, true)}
-                            type="button"
+                            tone="accept"
                           >
                             接受
-                          </button>
-                          <button
-                            className="friend-no"
+                          </FriendAction>
+                          <FriendAction
                             disabled={friendBusy}
                             onClick={() => respondToFriend(person.friendshipId, false)}
-                            type="button"
+                            tone="decline"
                           >
                             不用了
-                          </button>
-                        </div>
-                      </article>
+                          </FriendAction>
+                        </FriendActions>
+                      </FriendRow>
                     ))}
                   </div>
                 )}
@@ -2014,31 +1825,27 @@ export default function Home() {
                     </p>
                   ) : (
                     friends.friends.map((friend) => (
-                      <article className="friend-row" key={friend.friendshipId}>
-                        <span className="avatar">
-                          {friend.displayName.slice(0, 1).toUpperCase()}
-                        </span>
-                        <div className="friend-copy">
-                          <strong>{friend.displayName}</strong>
-                          <small>
-                            {friend.record
-                              ? `一起 ${friend.record.games} 場 · ${friend.record.wins} 勝 ${friend.record.losses} 敗${
-                                  friend.record.ties > 0 ? ` ${friend.record.ties} 和` : ""
-                                }`
-                              : `${friend.games} 場 · 還沒同桌過`}
-                          </small>
-                        </div>
-                        <div className="friend-actions">
-                          <button
-                            className="friend-no"
+                      <FriendRow
+                        detail={
+                          friend.record
+                            ? `一起 ${friend.record.games} 場 · ${friend.record.wins} 勝 ${friend.record.losses} 敗${
+                                friend.record.ties > 0 ? ` ${friend.record.ties} 和` : ""
+                              }`
+                            : `${friend.games} 場 · 還沒同桌過`
+                        }
+                        key={friend.friendshipId}
+                        name={friend.displayName}
+                      >
+                        <FriendActions>
+                          <FriendAction
                             disabled={friendBusy}
                             onClick={() => respondToFriend(friend.friendshipId, false)}
-                            type="button"
+                            tone="decline"
                           >
                             移除
-                          </button>
-                        </div>
-                      </article>
+                          </FriendAction>
+                        </FriendActions>
+                      </FriendRow>
                     ))
                   )}
                 </div>
@@ -2047,25 +1854,21 @@ export default function Home() {
                   <div className="friend-group">
                     <h3>等對方回覆</h3>
                     {friends.outgoing.map((person) => (
-                      <article className="friend-row" key={person.friendshipId}>
-                        <span className="avatar">
-                          {person.displayName.slice(0, 1).toUpperCase()}
-                        </span>
-                        <div className="friend-copy">
-                          <strong>{person.displayName}</strong>
-                          <small>@{person.username}</small>
-                        </div>
-                        <div className="friend-actions">
-                          <button
-                            className="friend-no"
+                      <FriendRow
+                        detail={`@${person.username}`}
+                        key={person.friendshipId}
+                        name={person.displayName}
+                      >
+                        <FriendActions>
+                          <FriendAction
                             disabled={friendBusy}
                             onClick={() => respondToFriend(person.friendshipId, false)}
-                            type="button"
+                            tone="decline"
                           >
                             取消
-                          </button>
-                        </div>
-                      </article>
+                          </FriendAction>
+                        </FriendActions>
+                      </FriendRow>
                     ))}
                   </div>
                 )}
@@ -2076,18 +1879,14 @@ export default function Home() {
           <>
             <h2>{authMode === "login" ? "登入，留著紀錄" : "開一個帳號"}</h2>
             <p className="account-intro">只是為了換手機也看得到分數。不登入也能玩。</p>
-            <div className="auth-tabs">
-              <button
-                className={authMode === "login" ? "active" : ""}
-                onClick={() => { setAuthMode("login"); setAccountError(""); }}
-                type="button"
-              >登入</button>
-              <button
-                className={authMode === "register" ? "active" : ""}
-                onClick={() => { setAuthMode("register"); setAccountError(""); }}
-                type="button"
-              >註冊</button>
-            </div>
+            <SegmentedTabs
+              items={[
+                { id: "login", label: "登入" },
+                { id: "register", label: "註冊" },
+              ]}
+              onChange={(next) => { setAuthMode(next); setAccountError(""); }}
+              value={authMode}
+            />
             <form className="auth-form" onSubmit={(event) => { event.preventDefault(); void submitAccount(); }}>
               {authMode === "register" && (
                 <label>
@@ -2123,14 +1922,13 @@ export default function Home() {
                   value={authPassword}
                 />
               </label>
-              {accountError && <p className="form-error">{accountError}</p>}
-              <button
-                className="primary-action"
+              {accountError && <FormError>{accountError}</FormError>}
+              <Button
                 disabled={accountBusy}
                 type="submit"
               >
                 {accountBusy ? "請稍候…" : authMode === "login" ? "登入" : "開帳號"}
-              </button>
+              </Button>
             </form>
           </>
         )}
@@ -2149,14 +1947,13 @@ export default function Home() {
         </button>
         <h2>設定</h2>
         <div className="profile-actions">
-          <button
+          <Button
             aria-pressed={soundEnabled}
-            className="feedback-toggle"
             onClick={toggleSound}
-            type="button"
+            variant="toggle"
           >
             落地音效{soundEnabled ? "開" : "關"}
-          </button>
+          </Button>
         </div>
     </Modal>
   ) : null;
@@ -2165,13 +1962,10 @@ export default function Home() {
     return (
       <main className="game-shell connecting">
         <header className="topbar">
-          <div className="brand">
-            <BrandMark />
-            <span>yazy</span>
-          </div>
+          <Brand />
         </header>
         <section className="connecting-card" aria-live="polite">
-          <span className="live-dot" />
+          <LiveDot />
           <p>{session ? `正在回到 ${session.code} 這一桌…` : "正在鋪桌子…"}</p>
         </section>
         {accountLayer}
@@ -2214,49 +2008,26 @@ export default function Home() {
             /* The hint left the row so the card stays quiet, but it is still
                the only place that says what a category pays for. */
             const hint = `${category.label}，${category.hint}`;
-            const label = (
-              <span>
-                {category.label}
-                {bestPreview?.id === category.id && (
-                  <span
-                    className="best-tag"
-                    title={`現在填入可增加 ${bestPreview.gain} 分${bestPreview.bonusGain ? "（含上半部獎勵 35 分）" : ""}；同分優先特殊牌型。未計算後續擲骰策略。`}
-                  >
-                    {bestPreview.bonusGain ? "含獎勵最多分" : "目前最多分"}
-                  </span>
-                )}
-              </span>
-            );
+            const tag =
+              bestPreview?.id === category.id
+                ? {
+                    text: bestPreview.bonusGain ? "含獎勵最多分" : "目前最多分",
+                    title: `現在填入可增加 ${bestPreview.gain} 分${bestPreview.bonusGain ? "（含上半部獎勵 35 分）" : ""}；同分優先特殊牌型。未計算後續擲骰策略。`,
+                  }
+                : undefined;
 
-            if (saved) {
-              return (
-                <div aria-label={hint} className="score-row scored" key={category.id}>
-                  {label}
-                  <b>{saved.score}</b>
-                </div>
-              );
-            }
-            if (!fillable) {
-              return (
-                <div aria-label={hint} className="score-row readonly" key={category.id}>
-                  {label}
-                  <b>{preview === undefined ? "" : preview}</b>
-                </div>
-              );
-            }
             return (
-              <button
-                aria-label={hint}
-                className={`score-row ${preview === 0 ? "zero" : ""} ${
-                  bestPreview?.id === category.id ? "best" : ""
-                }`}
+              <ScoreRow
+                best={bestPreview?.id === category.id}
                 disabled={busy || rolling}
+                hint={hint}
                 key={category.id}
+                label={category.label}
                 onClick={() => action("score", category.id)}
-              >
-                {label}
-                <b>{preview}</b>
-              </button>
+                status={saved ? "scored" : fillable ? "open" : "readonly"}
+                tag={tag}
+                value={saved ? saved.score : preview === undefined ? "" : preview}
+              />
             );
           })}
         </div>
@@ -2267,28 +2038,67 @@ export default function Home() {
         >
           {scoreExpanded ? "收起來" : "看全部 13 格"}
         </button>
-        <div className="bonus-row">
-          <span>
-            {viewedSummary.bonus
-              ? "上半部加成 +35 到手了"
-              : `上半部再 ${63 - viewedSummary.upper} 分就有 +35`}
-          </span>
-          <strong>{viewedSummary.upper} / 63</strong>
-        </div>
+        <BonusRow bonus={viewedSummary.bonus} upper={viewedSummary.upper} />
       </aside>
     );
 
     return (
       <main className="game-shell">
         <header className="topbar">
-          <button className="brand" onClick={leaveRoom} aria-label="回到首頁">
-            <BrandMark />
-            <span>yazy</span>
-          </button>
+          <Brand onClick={leaveRoom} aria-label="回到首頁" />
           <div className="topbar-actions">
-            <div className="room-pill">
-              <strong>{state.room.code}</strong>
-              <button onClick={copyInvite}>{copied ? "已複製" : "邀請"}</button>
+            {state.room.practice ? <span className="practice-label">測試模式<br />不計戰績</span> : <RoomCode code={state.room.code} copied={copied} onCopy={copyInvite} />}
+            <div className="table-menu" ref={tableMenuRef}>
+              <button
+                aria-expanded={tableMenuOpen}
+                aria-haspopup="menu"
+                aria-label="牌桌選項"
+                className="table-menu-trigger"
+                onClick={() => setTableMenuOpen((open) => !open)}
+                type="button"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                  <circle cx="5.5" cy="12" r="1.8" />
+                  <circle cx="12" cy="12" r="1.8" />
+                  <circle cx="18.5" cy="12" r="1.8" />
+                </svg>
+              </button>
+              {tableMenuOpen && (
+                <div className="table-menu-panel" role="menu">
+                  <button
+                    aria-checked={soundEnabled}
+                    className="table-menu-item"
+                    onClick={toggleSound}
+                    role="menuitemcheckbox"
+                    type="button"
+                  >
+                    落地音效
+                    <span className="menu-switch" aria-hidden="true" />
+                  </button>
+                  {canSurrender && (
+                    <>
+                      <div className="table-menu-divider" role="separator" />
+                      <button
+                        className="table-menu-item danger"
+                        disabled={busy || rolling}
+                        onClick={() => {
+                          setTableMenuOpen(false);
+                          setConfirmSurrender(true);
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        投降這一局…
+                      </button>
+                    </>
+                  )}
+                  {state.room.practice && (
+                    <button className="table-menu-item" role="menuitem" type="button" onClick={enterPractice}>
+                      重新開始練習
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <button
               aria-label={account ? account.displayName : "登入"}
@@ -2301,78 +2111,61 @@ export default function Home() {
           </div>
         </header>
 
-        {error && <div className="error-banner">{error}</div>}
+        {error && <ErrorBanner>{error}</ErrorBanner>}
 
         {state.room.status === "waiting" && (
           <section className="waiting-card">
             <h1>桌子開好了</h1>
             <p>把代碼給朋友，人到了再開始就好。</p>
-            <div className="code-display">
-              <strong>{state.room.code}</strong>
-              <button onClick={copyInvite}>{copied ? "已複製" : "複製邀請"}</button>
-            </div>
-            <div className="lobby-seats">
+            <RoomCode code={state.room.code} copied={copied} onCopy={copyInvite} variant="display" />
+            <LobbySeats>
               {state.players.map((player) => (
-                <div className="seat" key={player.id}>
-                  <span className="avatar">{player.name.slice(0, 1).toUpperCase()}</span>
-                  <span>
-                    {player.name}
-                    {player.id === session.playerId ? "（你）" : ""}
-                  </span>
-                </div>
+                <Seat
+                  key={player.id}
+                  name={player.name}
+                  suffix={player.id === session.playerId ? "（你）" : ""}
+                />
               ))}
-              <div className="seat empty">
-                <span className="avatar" aria-hidden="true">
-                  ＋
-                </span>
-                <span>還有位子</span>
-              </div>
-            </div>
+              <Seat />
+            </LobbySeats>
             {account && friends.friends.length > 0 && (
               <div className="invite-friends">
                 <h2>叫好友過來</h2>
                 <div className="invite-friend-list">
                   {friends.friends.map((friend) => {
-                    // 房間狀態只帶名字，而登入的人上桌用的就是顯示名稱，
-                    // 所以名字對得上就當他已經在桌上。真正的把關在伺服器。
                     const seated = state.players.some(
-                      (player) => player.name === friend.displayName,
+                      (player) => player.userId === friend.userId,
                     );
                     const invited = invitedIds.includes(friend.userId);
                     return (
-                      <article className="friend-row" key={friend.friendshipId}>
-                        <span className="avatar">
-                          {friend.displayName.slice(0, 1).toUpperCase()}
-                        </span>
-                        <div className="friend-copy">
-                          <strong>{friend.displayName}</strong>
-                          <small>@{friend.username}</small>
-                        </div>
-                        <button
-                          className="friend-invite"
+                      <FriendRow
+                        detail={`@${friend.username}`}
+                        key={friend.friendshipId}
+                        name={friend.displayName}
+                      >
+                        <FriendAction
                           disabled={seated || invited || friendBusy}
                           onClick={() => inviteFriend(friend.userId)}
-                          type="button"
+                          tone="invite"
                         >
                           {seated ? "在桌上" : invited ? "已邀請" : "邀請"}
-                        </button>
-                      </article>
+                        </FriendAction>
+                      </FriendRow>
                     );
                   })}
                 </div>
               </div>
             )}
             {state.room.hostPlayerId === session.playerId ? (
-              <button
-                className="primary-action"
+              <Button
                 disabled={busy || state.players.length < 2}
                 onClick={() => action("start")}
               >
                 {state.players.length < 2 ? "再等一個人" : "開始"}
-              </button>
+              </Button>
             ) : (
               <div className="waiting-note">
-                <span className="live-dot" />
+                <LiveDot />
                 等開桌的人按開始
               </div>
             )}
@@ -2382,25 +2175,21 @@ export default function Home() {
         {state.room.status === "playing" && (
           <div className="game-grid">
             <section className="table-panel">
+              {(soleSurvivor || me?.surrenderReason) && (
               <div className="concession-panel" aria-live="polite">
                 {soleSurvivor ? (
                   <>
                     <strong>{soleSurvivor.id === session.playerId ? "你已獲勝！" : `${soleSurvivor.name}已獲勝`}</strong>
                     <p>其他玩家已投降。勝者可以繼續擲骰填滿計分卡，挑戰分數紀錄。</p>
-                    {soleSurvivor.id === session.playerId && <button className="ghost-action" disabled={busy || rolling}
-                      onClick={() => action("finish")} type="button">立即結算</button>}
+                    {soleSurvivor.id === session.playerId && <Button disabled={busy || rolling}
+                      onClick={() => action("finish")} variant="ghost">立即結算</Button>}
                     {soleSurvivor.id === session.playerId && <p>想挑戰紀錄？直接繼續擲骰即可。</p>}
                   </>
                 ) : me?.surrenderReason ? (
                   <p>{me.surrenderReason === "automatic" ? "剩餘最高分已無法追平領先者，系統已自動投降。" : "你已投降。"}仍可觀看本局。</p>
-                ) : (
-                  <>
-                    <p>無法追平時會自動投降；勝者仍可繼續挑戰紀錄。你目前最高可達 {maximumFinalScore(state.scores.filter((score) => score.playerId === session.playerId))} 分。</p>
-                    <button className="feedback-toggle" disabled={busy || rolling} type="button"
-                      onClick={() => setConfirmSurrender(true)}>投降</button>
-                  </>
-                )}
+                ) : null}
               </div>
+              )}
               <div className="turn-heading">
                 <div>
                   <p className="round-label">第 {state.room.round} / 13 回</p>
@@ -2434,73 +2223,48 @@ export default function Home() {
                 />
               )}
 
-              <div
-                className={`dice-tray ${isMyTurn ? "" : "idle"}`}
-                aria-busy={rolling}
-                aria-label="骰子區"
-                aria-live="polite"
-              >
-                <DiceShadowDefs />
+              <DiceTray idle={!isMyTurn} rolling={rolling}>
                 {Array.from({ length: 5 }).map((_, index) => {
-                  const die = state.room.dice[index];
                   const inFlight = diceInFlight[index];
                   return (
-                    <button
-                      aria-label={
-                        inFlight
-                          ? "骰子滾動中"
-                          : die
-                          ? `骰子 ${die}，${visibleHeld[index] ? "已保留" : "未保留"}`
-                          : "尚未擲骰"
-                      }
-                      className={`die ${visibleHeld[index] ? "held" : ""} ${
-                        !die && !inFlight ? "blank" : ""
-                      } ${inFlight ? "rolling" : ""}`}
+                    <Die
                       disabled={
                         !isMyTurn || state.room.rollsUsed === 0 || busy || inFlight
                       }
+                      held={visibleHeld[index]}
                       key={index}
                       onClick={() => toggleHeld(index)}
-                    >
-                      {die || inFlight ? (
-                        <DieSprite
-                          animating={inFlight}
-                          register={registerSprite[index]}
-                          value={die || blankThrowFace(index)}
-                        />
-                      ) : (
-                        <span className="die-placeholder">·</span>
-                      )}
-                      {visibleHeld[index] && <small>留</small>}
-                    </button>
+                      register={registerSprite[index]}
+                      rolling={inFlight}
+                      throwFace={blankThrowFace(index)}
+                      value={state.room.dice[index] ?? 0}
+                    />
                   );
                 })}
-              </div>
+              </DiceTray>
 
               {/* 擲得動的時候是一顆按鈕，擲不動的時候就換成一句話 —— 桌上不留
                   按不下去的鍵。 */}
               <div className="roll-actions">
                 {isMyTurn && state.room.rollsUsed < 3 ? (
-                  <button
-                    className="roll-button"
+                  <Button
                     disabled={busy || rolling}
                     onClick={() => action("roll")}
+                    variant="roll"
                   >
                     {rolling
                       ? "骰子還在滾…"
                       : state.room.rollsUsed === 0
                         ? "擲骰"
                         : "再擲一次"}
-                  </button>
+                  </Button>
                 ) : (
                   <div className="roll-status" aria-live="polite">
                     {isMyTurn ? (
                       "三次都擲完了"
                     ) : (
                       <>
-                        <span className="avatar" aria-hidden="true">
-                          {(currentPlayer?.name ?? "人").slice(0, 1).toUpperCase()}
-                        </span>
+                        <Avatar aria-hidden="true" name={currentPlayer?.name ?? "人"} />
                         等{currentPlayer?.name ?? "對方"}想一下
                       </>
                     )}
@@ -2513,37 +2277,23 @@ export default function Home() {
                       ? state.room.rollsUsed === 0
                         ? "按下擲骰，慢慢來"
                         : state.room.rollsUsed >= 3
-                          ? "亮起來的格子都可以填，填了就換下一個人"
+                          ? state.room.practice ? "選一格計分，開始下一回合" : "亮起來的格子都可以填，填了就換下一個人"
                           : "點骰子留下想保留的，再擲剩下的"
                       : `不用急，${currentPlayer?.name ?? "對方"}填完就換你`}
                 </p>
-                <button
-                  aria-pressed={soundEnabled}
-                  className="feedback-toggle"
-                  onClick={toggleSound}
-                  type="button"
-                >
-                  落地音效{soundEnabled ? "開" : "關"}
-                </button>
               </div>
 
               <div className="players-strip" aria-label="這桌的人">
                 {state.players.map((player) => {
                   const summary = scoreSummaries.get(player.id) ?? EMPTY_SCORE_SUMMARY;
                   return (
-                    <article
-                      className={`player-chip ${
-                        player.seat === state.room.currentSeat ? "active" : ""
-                      }`}
+                    <PlayerChip
+                      active={player.seat === state.room.currentSeat}
+                      detail={<>{summary.total}{player.surrenderReason ? ` · ${player.surrenderReason === "automatic" ? "自動投降" : "已投降"}` : ""}</>}
                       key={player.id}
-                    >
-                      <span className="avatar">{player.name.slice(0, 1).toUpperCase()}</span>
-                      <span className="player-copy">
-                        {player.name}
-                        {player.id === session.playerId ? "（你）" : ""}
-                        <small>{summary.total}{player.surrenderReason ? ` · ${player.surrenderReason === "automatic" ? "自動投降" : "已投降"}` : ""}</small>
-                      </span>
-                    </article>
+                      name={player.name}
+                      suffix={player.id === session.playerId ? "（你）" : ""}
+                    />
                   );
                 })}
               </div>
@@ -2557,29 +2307,30 @@ export default function Home() {
           <>
             <section className="results-card">
               <h1>這局結束了</h1>
-              <p>本局勝者是{rankings.filter((player) => !player.surrenderReason && scoreSummaries.get(player.id)?.total === scoreSummaries.get(rankings[0]?.id)?.total).map((player) => player.name).join("、") || "大家"}。玩得開心就好。</p>
-              <ol className="podium">
-                {rankings.map((player) => (
-                  <li className={`podium-place place-${placeFor(resultValue(scoreSummaries.get(player.id)?.total ?? 0, player.surrenderReason), rankings.map((entry) => resultValue(scoreSummaries.get(entry.id)?.total ?? 0, entry.surrenderReason)))}`} key={player.id}>
-                    <span className="rank">{placeFor(resultValue(scoreSummaries.get(player.id)?.total ?? 0, player.surrenderReason), rankings.map((entry) => resultValue(scoreSummaries.get(entry.id)?.total ?? 0, entry.surrenderReason)))}</span>
-                    <span className="avatar">{player.name.slice(0, 1).toUpperCase()}</span>
-                    <strong>{player.name}{player.surrenderReason ? "（投降）" : ""}</strong>
-                    <b>{scoreSummaries.get(player.id)?.total ?? 0}</b>
-                  </li>
-                ))}
-              </ol>
+              {state.room.practice ? <p>練習完成，本局不計入戰績。</p> : <p>本局勝者是{rankings.filter((player) => !player.surrenderReason && scoreSummaries.get(player.id)?.total === scoreSummaries.get(rankings[0]?.id)?.total).map((player) => player.name).join("、") || "大家"}。玩得開心就好。</p>}
+              <Podium
+                entries={rankings.map((player) => ({
+                  id: player.id,
+                  name: player.name,
+                  place: placeFor(resultValue(scoreSummaries.get(player.id)?.total ?? 0, player.surrenderReason), rankings.map((entry) => resultValue(scoreSummaries.get(entry.id)?.total ?? 0, entry.surrenderReason))),
+                  total: scoreSummaries.get(player.id)?.total ?? 0,
+                  surrendered: Boolean(player.surrenderReason),
+                }))}
+              />
               <div className="results-actions">
-                <button className="primary-action" onClick={leaveRoom}>
-                  再來一桌
-                </button>
-                <button
+                {state.room.hostPlayerId === session.playerId ? (
+                  <Button disabled={busy} onClick={() => action("restart")}>
+                    {busy ? "準備中…" : "再開一局"}
+                  </Button>
+                ) : <p role="status">等待房主再開一局，不用離開房間。</p>}
+                <Button disabled={busy} onClick={leaveRoom} variant="ghost">離開房間</Button>
+                <Button
                   aria-expanded={showFinalCards}
-                  className="ghost-action"
                   onClick={() => setShowFinalCards((open) => !open)}
-                  type="button"
+                  variant="ghost"
                 >
                   {showFinalCards ? "收起計分卡" : "看計分卡"}
-                </button>
+                </Button>
               </div>
             </section>
             {showFinalCards && <div className="final-cards">{scoreCard}</div>}
@@ -2590,8 +2341,8 @@ export default function Home() {
             <h2>確定要投降？</h2>
             <p>投降後本局判負，保留已得分數，無法再擲骰。其他玩家可以繼續挑戰分數紀錄。</p>
             <div className="results-actions">
-              <button className="ghost-action" onClick={() => setConfirmSurrender(false)}>繼續玩</button>
-              <button className="primary-action" disabled={busy} onClick={() => { setConfirmSurrender(false); void action("surrender"); }}>確認投降</button>
+              <Button onClick={() => setConfirmSurrender(false)} variant="ghost">繼續玩</Button>
+              <Button disabled={busy} onClick={() => { setConfirmSurrender(false); void action("surrender"); }}>確認投降</Button>
             </div>
           </Modal>
         )}
@@ -2603,10 +2354,7 @@ export default function Home() {
   return (
     <main className="landing">
       <header className="landing-nav">
-        <div className="brand">
-          <BrandMark />
-          <span>yazy</span>
-        </div>
+        <Brand />
         <div className="nav-actions">
           <button className="account-trigger" onClick={openAccountPanel} type="button">
             <span>{account?.displayName.slice(0, 1).toUpperCase() ?? "人"}</span>
@@ -2636,34 +2384,25 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="hero-tray" aria-hidden="true">
-          <DiceShadowDefs />
+        <HeroTray>
           <StillDie value={4} />
           <StillDie value={6} />
           <StillDie value={1} />
-        </div>
+        </HeroTray>
 
         <div className="join-card">
-          <div className="card-tabs">
-            <button
-              className={mode === "create" ? "active" : ""}
-              onClick={() => {
-                setMode("create");
-                setError("");
-              }}
-            >
-              開一桌
-            </button>
-            <button
-              className={mode === "join" ? "active" : ""}
-              onClick={() => {
-                setMode("join");
-                setError("");
-              }}
-            >
-              加入朋友的桌
-            </button>
-          </div>
+          <SegmentedTabs
+            items={[
+              { id: "create", label: "開一桌" },
+              { id: "join", label: "加入朋友的桌" },
+            ]}
+            onChange={(next) => {
+              setMode(next);
+              setError("");
+            }}
+            value={mode}
+            variant="card"
+          />
           <div className="form-body">
             {resumable && (
               <div className="resume-note">
@@ -2680,7 +2419,6 @@ export default function Home() {
               <span>你想用什麼名字</span>
               <input
                 autoComplete="nickname"
-                disabled={Boolean(account)}
                 maxLength={18}
                 onChange={(event) => setName(event.target.value)}
                 value={name}
@@ -2705,17 +2443,17 @@ export default function Home() {
               </label>
             </div>
 
-            {error && <p className="form-error">{error}</p>}
-            <button
-              className="primary-action"
+            {error && <FormError>{error}</FormError>}
+            <Button
               disabled={busy}
               onClick={() => enterRoom(mode)}
             >
               {busy ? "正在鋪桌子…" : mode === "create" ? "開一桌" : "進去"}
-            </button>
+            </Button>
+            <Button disabled={busy} onClick={enterPractice} variant="ghost">測試模式</Button>
             <p className="privacy-note">
               {account
-                ? `會用「${account.displayName}」上桌，分數自動留著。`
+                ? "可以自訂這桌的名字，分數仍會存到你的帳號。"
                 : "不用註冊也能玩。登入只是為了留著紀錄。"}
             </p>
           </div>
@@ -2736,21 +2474,18 @@ export default function Home() {
                   </small>
                 </div>
                 <div className="invite-actions">
-                  <button
-                    className="primary-action"
+                  <Button
                     disabled={busy}
                     onClick={() => void enterRoom("join", invite.code)}
-                    type="button"
                   >
                     {busy ? "正在過去…" : "進去"}
-                  </button>
-                  <button
-                    className="text-action"
+                  </Button>
+                  <Button
                     onClick={() => void dismissInvite(invite.id)}
-                    type="button"
+                    variant="text"
                   >
                     這次不了
-                  </button>
+                  </Button>
                 </div>
               </article>
             ))}
@@ -2776,16 +2511,19 @@ export default function Home() {
                 </button>
               )}
             </h2>
-            <div className="history-stats">
-              <article><strong>{stats.games}</strong><span>場次</span></article>
-              <article><strong>{stats.winRate}%</strong><span>勝率</span></article>
-              <article><strong>{stats.bestScore}</strong><span>最高分</span></article>
-              <article><strong>{stats.averageScore}</strong><span>平均分</span></article>
-              <article><strong>{stats.yazyRate}%</strong><span>YAZY 率</span></article>
-            </div>
+            <StatGrid
+              stats={[
+                { label: "場次", value: stats.games },
+                { label: "勝率", value: `${stats.winRate}%` },
+                { label: "最高分", value: stats.bestScore },
+                { label: "平均分", value: stats.averageScore },
+                { label: "YAZY 率", value: `${stats.yazyRate}%` },
+              ]}
+              variant="history"
+            />
           </>
         )}
-        {account && <p className="record-note">統計最近 200 場完成對局</p>}
+        {account && <RecordNote>統計歷史所有已完成對局</RecordNote>}
         <h2>上次的桌</h2>
         {!historyLoaded ? (
           <p className="history-empty">正在翻上次的桌…</p>
@@ -2804,7 +2542,7 @@ export default function Home() {
                   </strong>
                   <b>
                     {result.mine ? `勝者 ${result.winner?.total} 分` : result.winner?.total} ·{" "}
-                    {historyDate.format(new Date(game.finishedAt))}
+                    {formatHistoryDate(game.finishedAt)}
                   </b>
                 </article>
               );

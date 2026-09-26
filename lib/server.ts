@@ -96,7 +96,7 @@ export async function getRoomState(code: string, ifNoneMatch?: string | null) {
   }
   const [roomPlayers, roomScores] = await Promise.all([
     db
-      .select({ id: players.id, name: players.name, seat: players.seat, surrenderReason: players.surrenderReason })
+      .select({ id: players.id, userId: players.userId, name: players.name, seat: players.seat, surrenderReason: players.surrenderReason })
       .from(players)
       .where(eq(players.roomId, room.id))
       .orderBy(asc(players.seat)),

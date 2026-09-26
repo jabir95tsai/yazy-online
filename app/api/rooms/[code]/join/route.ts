@@ -19,7 +19,7 @@ export async function POST(
     const code = cleanCode((await params).code);
     const body = (await request.json()) as { name?: string };
     const account = await getCurrentUser(request);
-    const name = account?.displayName ?? cleanName(body.name);
+    const name = cleanName(body.name ?? account?.displayName);
     if (!name) {
       return Response.json({ error: "先取一個玩家名稱吧。" }, { status: 400 });
     }

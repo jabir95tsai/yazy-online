@@ -4,9 +4,10 @@ import { players, rooms, scores } from "@/db/schema";
 import { categoryIds, fairDieFromByte, scoreDice, type CategoryId } from "@/lib/game";
 import { resolveMatch, type MatchPlayer, type MatchScore } from "@/lib/match";
 import { apiError, cleanCode, hashToken } from "@/lib/server";
+import { loadFinishedGames } from "@/lib/history";
 
 type ActionBody = {
-  action?: "start" | "roll" | "hold" | "score" | "skip" | "surrender" | "finish";
+  action?: "start" | "restart" | "roll" | "hold" | "score" | "skip" | "surrender" | "finish";
   playerId?: string;
   token?: string;
   held?: boolean[];
@@ -132,6 +133,39 @@ export async function POST(
     }
     if (!body.expectedUpdatedAt || body.expectedUpdatedAt !== room.updatedAt) {
       return Response.json({ error: "房間狀態已變更，請重新整理。" }, { status: 409 });
+    }
+
+    if (body.action === "restart") {
+      if (player.id !== room.hostPlayerId) {
+        return Response.json({ error: "只有房主能再開一局。" }, { status: 403 });
+      }
+      if (room.status !== "finished" || roomPlayers.length < 2) {
+        return Response.json({ error: "本局結束後才能再開一局。" }, { status: 409 });
+      }
+      const games = await loadFinishedGames([room.id], [], 1);
+      const game = games.find((entry) => entry.finishedAt === room.finishedAt);
+      if (!game) return Response.json({ error: "無法保存本局戰績，請重試。" }, { status: 409 });
+      const updatedAt = `${nextTimestamp(room.updatedAt).slice(0, -1)}${Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString().padStart(10, "0")).join("")}Z`;
+      const d1 = getD1();
+      // Snapshot and reset share a CAS-owned transaction. Losing requests cannot
+      // archive twice or erase scores from the newly started game.
+      const [result] = await d1.batch([
+        d1.prepare(`UPDATE rooms SET status = 'playing', current_seat = 0, round = 1,
+          dice_json = '[]', held_json = ?, rolls_used = 0, finished_at = NULL,
+          turn_deadline = ?, updated_at = ? WHERE id = ? AND status = 'finished' AND updated_at = ?`)
+          .bind(JSON.stringify(emptyHeld), turnDeadline(), updatedAt, room.id, room.updatedAt),
+        d1.prepare(`INSERT INTO room_games (room_id, finished_at, game_json)
+          SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
+          .bind(room.id, game.finishedAt, JSON.stringify(game), room.id, updatedAt),
+        d1.prepare(`DELETE FROM scores WHERE room_id = ?
+          AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
+          .bind(room.id, room.id, updatedAt),
+        d1.prepare(`UPDATE players SET surrender_reason = NULL WHERE room_id = ?
+          AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
+          .bind(room.id, room.id, updatedAt),
+      ]);
+      return resultChanged(result) ? Response.json({ ok: true })
+        : Response.json({ error: "房間狀態已變更，請重新整理。" }, { status: 409 });
     }
 
     if (body.action === "start") {

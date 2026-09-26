@@ -299,9 +299,9 @@ function compose(
 /** Anticipation squash, before the die leaves the hand. */
 const CROUCH_MS = 83;
 /** Launch to the top of the arc. */
-const ASCENT_MS = 583;
+const ASCENT_MS = 300;
 /** Top of the arc to first contact, when nothing is holding the die up. */
-const DESCENT_MS = 717;
+const DESCENT_MS = 360;
 /** A drop cannot be cut shorter than this, however late the answer arrives. */
 const MIN_DESCENT_MS = 240;
 /** First contact to the top of the bounce, and back down again. */

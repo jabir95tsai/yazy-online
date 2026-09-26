@@ -1,7 +1,11 @@
 "use client";
 import { useEffect, useRef, type ReactNode } from "react";
 
-/** Native modal supplies focus trapping, Escape and focus restoration. */
+/**
+ * Native modal supplies focus trapping, Escape and focus restoration.
+ *
+ * @category Overlays
+ */
 export function Modal({ label, onClose, children }: {
   label: string; onClose: () => void; children: ReactNode;
 }) {

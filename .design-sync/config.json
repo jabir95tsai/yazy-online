@@ -1,0 +1,109 @@
+{
+  "projectId": "29d59f83-4f5b-4074-a3ef-8d05e3157df1",
+  "pkg": "yazy-battle-ui",
+  "globalName": "YazyBattle",
+  "shape": "package",
+  "buildCmd": "node .design-sync/build.mjs",
+  "srcDir": "../../../app/components",
+  "tsconfig": "../../../tsconfig.json",
+  "cssEntry": "styles.css",
+  "extraFonts": [
+    "fonts/geist.css"
+  ],
+  "componentSrcMap": {
+    "DieSprite": null,
+    "DiceShadowDefs": null,
+    "BrandMark": "../../../app/components/brand.tsx",
+    "Brand": "../../../app/components/brand.tsx",
+    "DiceTray": "../../../app/components/die.tsx",
+    "Die": "../../../app/components/die.tsx",
+    "StillDie": "../../../app/components/die.tsx",
+    "LiveDot": "../../../app/components/feedback.tsx",
+    "FormError": "../../../app/components/feedback.tsx",
+    "ErrorBanner": "../../../app/components/feedback.tsx",
+    "RecordNote": "../../../app/components/feedback.tsx",
+    "FriendRow": "../../../app/components/friend-row.tsx",
+    "FriendActions": "../../../app/components/friend-row.tsx",
+    "FriendAction": "../../../app/components/friend-row.tsx",
+    "HeadToHead": "../../../app/components/friend-row.tsx",
+    "PlayerChip": "../../../app/components/players.tsx",
+    "Seat": "../../../app/components/players.tsx",
+    "LobbySeats": "../../../app/components/players.tsx",
+    "Podium": "../../../app/components/players.tsx",
+    "ScoreRow": "../../../app/components/score-row.tsx",
+    "BonusRow": "../../../app/components/score-row.tsx",
+    "SegmentedTabs": "../../../app/components/tabs.tsx",
+    "HeroTray": "../../../app/components/die.tsx"
+  },
+  "overrides": {
+    "Modal": {
+      "cardMode": "single",
+      "primaryStory": "ConfirmSurrender",
+      "viewport": "760x520"
+    },
+    "BonusRow": {
+      "cardMode": "column"
+    },
+    "Brand": {
+      "cardMode": "column"
+    },
+    "Button": {
+      "cardMode": "column"
+    },
+    "DiceTray": {
+      "cardMode": "column"
+    },
+    "Die": {
+      "cardMode": "column"
+    },
+    "ErrorBanner": {
+      "cardMode": "column"
+    },
+    "FormError": {
+      "cardMode": "column"
+    },
+    "FriendAction": {
+      "cardMode": "column"
+    },
+    "FriendActions": {
+      "cardMode": "column"
+    },
+    "FriendRow": {
+      "cardMode": "column"
+    },
+    "HeadToHead": {
+      "cardMode": "column"
+    },
+    "LobbySeats": {
+      "cardMode": "column"
+    },
+    "PlayerChip": {
+      "cardMode": "column"
+    },
+    "Podium": {
+      "cardMode": "column"
+    },
+    "RecordNote": {
+      "cardMode": "column"
+    },
+    "RoomCode": {
+      "cardMode": "column"
+    },
+    "ScoreRow": {
+      "cardMode": "column"
+    },
+    "SegmentedTabs": {
+      "cardMode": "column"
+    },
+    "StatGrid": {
+      "cardMode": "column"
+    },
+    "StillDie": {
+      "cardMode": "column"
+    },
+    "TurnCountdown": {
+      "cardMode": "column"
+    }
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

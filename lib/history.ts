@@ -1,15 +1,13 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { idsIn } from "./query.ts";
 import { getDb } from "@/db";
-import { players, rooms, scores } from "@/db/schema";
+import { players, rooms, scores, roomGames } from "@/db/schema";
 
 export { historyStats, versusRecords } from "@/lib/stats";
 export type { HistoryStats, VersusRecord } from "@/lib/stats";
 
 /** How many finished games the landing page and the record tab list. */
 export const HISTORY_LIMIT = 20;
-/** How far back the win rate, averages and head-to-head records look. */
-export const STATS_LIMIT = 200;
 
 export type HistoryGame = {
   code: string;
@@ -27,21 +25,23 @@ export type HistoryGame = {
 export async function loadFinishedGames(
   roomIds: string[],
   myPlayerIds: string[] = [],
-  limit = HISTORY_LIMIT,
+  limit: number | null = HISTORY_LIMIT,
 ) {
   const uniqueRoomIds = [...new Set(roomIds)];
   if (!uniqueRoomIds.length) return [] as HistoryGame[];
   const db = getDb();
-  const finishedRooms = await db
+  const finishedQuery = db
     .select()
     .from(rooms)
     .where(and(idsIn(rooms.id, uniqueRoomIds), eq(rooms.status, "finished")))
-    .orderBy(desc(rooms.finishedAt))
-    .limit(limit);
-  if (!finishedRooms.length) return [] as HistoryGame[];
-
-  const ids = finishedRooms.map((room) => room.id);
-  const [gamePlayers, gameScores] = await Promise.all([
+    .orderBy(desc(rooms.finishedAt));
+  const archiveQuery = db.select().from(roomGames)
+    .where(idsIn(roomGames.roomId, uniqueRoomIds)).orderBy(desc(roomGames.finishedAt));
+  // A consistent snapshot prevents a concurrent restart from mixing old room
+  // metadata with the new game's empty scorecard or counting a game twice.
+  const [finishedRooms, archived, gamePlayers, gameScores] = await db.batch([
+    limit === null ? finishedQuery : finishedQuery.limit(limit),
+    limit === null ? archiveQuery : archiveQuery.limit(limit),
     db
       .select({
         id: players.id,
@@ -52,17 +52,18 @@ export async function loadFinishedGames(
         surrenderReason: players.surrenderReason,
       })
       .from(players)
-      .where(idsIn(players.roomId, ids)),
+      .where(idsIn(players.roomId, uniqueRoomIds)),
     db
       .select({ roomId: scores.roomId, playerId: scores.playerId, category: scores.category, score: scores.score })
       .from(scores)
-      .where(idsIn(scores.roomId, ids)),
+      .where(idsIn(scores.roomId, uniqueRoomIds)),
   ]);
   const mine = new Set(myPlayerIds);
   const playersByRoom = Map.groupBy(gamePlayers, (player) => player.roomId);
   const scoresByPlayer = Map.groupBy(gameScores, (score) => score.playerId);
+  const userByPlayer = new Map(gamePlayers.map((player) => [player.id, player.userId]));
 
-  return finishedRooms.map((room) => ({
+  const currentGames = finishedRooms.map((room) => ({
     code: room.code,
     finishedAt: room.finishedAt ?? room.updatedAt,
     players: (playersByRoom.get(room.id) ?? [])
@@ -77,24 +78,28 @@ export async function loadFinishedGames(
           .map(({ category, score }) => ({ category, score })),
       })),
   }));
+  const archivedGames = archived.map((row) => {
+    const game = JSON.parse(row.gameJson) as HistoryGame;
+    return { ...game, players: game.players.map((player) => ({
+      ...player, userId: userByPlayer.get(player.id) ?? player.userId, isMe: mine.has(player.id),
+    })) };
+  });
+  const games = [...currentGames, ...archivedGames]
+    .sort((a, b) => b.finishedAt.localeCompare(a.finishedAt));
+  return limit === null ? games : games.slice(0, limit);
 }
 
 /**
  * Every finished game on an account, newest first.
  *
- * The default reaches further back than the lists show, because the win rate
- * and the head-to-head records are only worth anything over a run of games.
+ * Statistics include all finished games by default; lists may request a limit.
  */
-export async function loadUserHistory(userId: string, limit = STATS_LIMIT) {
+export async function loadUserHistory(userId: string, limit: number | null = null) {
   const db = getDb();
-  const recentRooms = db.select({ id: rooms.id }).from(rooms)
-    .where(and(eq(rooms.status, "finished"), inArray(rooms.id,
-      db.select({ roomId: players.roomId }).from(players).where(eq(players.userId, userId)))))
-    .orderBy(desc(rooms.finishedAt)).limit(limit);
   const accountPlayers = await db
     .select({ id: players.id, roomId: players.roomId })
     .from(players)
-    .where(and(eq(players.userId, userId), inArray(players.roomId, recentRooms)));
+    .where(eq(players.userId, userId));
   return loadFinishedGames(
     accountPlayers.map((player) => player.roomId),
     accountPlayers.map((player) => player.id),
