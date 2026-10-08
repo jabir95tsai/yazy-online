@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { Button } from "./button";
 
 /**
  * The turn clock, shown only once it has actually run out.
@@ -51,9 +52,9 @@ export function TurnCountdown({
           : `${currentPlayerName}好像離開了`}
       </span>
       {!isMyTurn && (
-        <button disabled={busy} onClick={onSkip} type="button">
+        <Button variant="soft" disabled={busy} onClick={onSkip}>
           跳過這個回合
-        </button>
+        </Button>
       )}
     </div>
   );

@@ -5,7 +5,8 @@ import { mkdir } from "node:fs/promises";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE
   ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : "playwright");
 const origin = process.env.TEST_ORIGIN ?? "http://localhost:3100";
-assert.ok(["localhost", "127.0.0.1"].includes(new URL(origin).hostname));
+const live = process.env.LIVE_DICE === "1" && origin === "https://yazy-online.jabir95tsai.workers.dev";
+assert.ok(live || ["localhost", "127.0.0.1"].includes(new URL(origin).hostname));
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
@@ -56,12 +57,27 @@ try {
   await page.getByRole("button", { name: "再擲一次", exact: true }).tap();
   await page.waitForFunction(() => document.querySelectorAll(".die.rolling").length === 4);
   assert.equal(rolls, 0, "Animation must begin before the pending hold completes");
+  const previewValues = page.locator("button.score-row b");
+  assert.ok((await previewValues.allTextContents()).every(value => value === ""),
+    "Previous score previews must disappear as soon as the dice launch");
   const before = await dice.nth(1).locator("polygon").first().getAttribute("points");
   await page.waitForTimeout(150);
   assert.notEqual(await dice.nth(1).locator("polygon").first().getAttribute("points"), before);
   assert.ok(releaseHold);
+  await page.waitForTimeout(1200);
+  const waitingPose = await dice.nth(1).locator("polygon").first().getAttribute("points");
+  await page.waitForTimeout(250);
+  assert.notEqual(await dice.nth(1).locator("polygon").first().getAttribute("points"), waitingPose,
+    "Dice must continue turning gently while the connection is pending");
   releaseHold();
+  await page.waitForTimeout(200);
+  assert.equal(rolls, 1);
+  assert.ok(await page.locator(".die.rolling").count() > 0);
+  assert.ok((await previewValues.allTextContents()).every(value => value === ""),
+    "Authoritative roll results must stay hidden until every die settles");
   await page.waitForFunction(() => !document.querySelector(".die.rolling"));
+  await page.waitForFunction(() => [...document.querySelectorAll("button.score-row b")]
+    .some(el => el.textContent === "25"));
   assert.equal(rolls, 1);
   assert.equal(room.room.dice[0], 1);
   assert.match(await dice.nth(1).getAttribute("aria-label"), /骰子 6/);

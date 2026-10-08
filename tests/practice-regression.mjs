@@ -17,7 +17,24 @@ try {
   page.on("pageerror", error => errors.push(error.message));
   page.on("request", request => { if (request.url().includes("/api/rooms")) roomRequests.push(request.url()); });
   await page.goto(origin);
-  await page.getByRole("button", { name: "測試模式", exact: true }).tap();
+  assert.equal(await page.getByRole("button", { name: /測試模式/ }).count(), 0);
+  await page.getByRole("button", { name: "設定", exact: true }).tap();
+  const settings = page.getByRole("dialog", { name: "設定", exact: true });
+  const sound = settings.getByRole("switch", { name: "落地音效", exact: true });
+  await sound.tap();
+  assert.equal(await sound.getAttribute("aria-checked"), "false");
+  for (const width of [320, 390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await mkdir("outputs", { recursive: true });
+    await page.screenshot({ path: `outputs/settings-${width}.png` });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.keyboard.press("Escape");
+  assert.equal(await settings.count(), 0);
+  await page.getByRole("button", { name: "設定", exact: true }).tap();
+  assert.equal(await sound.getAttribute("aria-checked"), "false");
+  await settings.getByRole("button", { name: /測試模式/ }).tap();
   await page.locator(".practice-label").waitFor();
   assert.equal(await page.locator(".concession-panel").count(), 0);
   const roll = async () => {
@@ -62,7 +79,8 @@ try {
   await page.getByRole("menuitem", { name: "重新開始練習", exact: true }).tap();
   assert.equal(await page.locator(".die.rolling").count(), 0);
   await page.getByRole("button", { name: "回到首頁", exact: true }).tap();
-  await page.getByRole("button", { name: "測試模式", exact: true }).waitFor();
+  await page.getByRole("button", { name: "設定", exact: true }).waitFor();
+  assert.equal(await page.getByRole("dialog").count(), 0);
   assert.equal(await page.evaluate(() => (localStorage.getItem("yazy-club-sessions") ?? "").includes("practice")), false);
   assert.deepEqual(roomRequests, []);
   assert.deepEqual(errors, []);

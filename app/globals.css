@@ -20,6 +20,10 @@
   --hairline: rgba(43, 40, 37, 0.07);
   --lift: 0 1px 2px rgba(43, 40, 37, 0.04), 0 24px 48px -32px rgba(43, 40, 37, 0.3);
   --lift-soft: 0 1px 2px rgba(43, 40, 37, 0.04);
+  --r-sm: 14px;
+  --r-md: 20px;
+  --r-lg: 28px;
+  --r-pill: 999px;
 }
 
 * {
@@ -101,7 +105,7 @@ input:focus-visible {
 .account-trigger {
   background: transparent;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--ink-soft);
   cursor: pointer;
   font-size: 14px;
@@ -194,7 +198,7 @@ input:focus-visible {
 .hero-tray {
   align-items: flex-end;
   background: var(--tray);
-  border-radius: 26px;
+  border-radius: var(--r-lg);
   display: flex;
   gap: 16px;
   padding: 38px 30px 24px;
@@ -212,7 +216,7 @@ input:focus-visible {
 
 .join-card {
   background: var(--card);
-  border-radius: 28px;
+  border-radius: var(--r-lg);
   box-shadow: var(--lift);
   display: flex;
   flex-direction: column;
@@ -225,7 +229,7 @@ input:focus-visible {
 .card-tabs,
 .auth-tabs {
   background: var(--sunk-strong);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   display: flex;
   gap: 4px;
   padding: 4px;
@@ -235,7 +239,7 @@ input:focus-visible {
 .auth-tabs button {
   background: transparent;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--ink-soft);
   cursor: pointer;
   flex: 1;
@@ -284,7 +288,7 @@ input:focus-visible {
 .profile-field input {
   background: var(--sunk-strong);
   border: 0;
-  border-radius: 18px;
+  border-radius: var(--r-md);
   color: var(--ink);
   font-size: 17px;
   min-height: 56px;
@@ -305,6 +309,11 @@ input:focus-visible {
   font-weight: 800;
   letter-spacing: 0.22em;
   text-transform: uppercase;
+}
+
+/* Keep the focus ring inside the field's collapsing overflow container. */
+.code-input:focus-visible {
+  outline-offset: -3px;
 }
 
 .code-field {
@@ -329,7 +338,7 @@ input:focus-visible {
   align-items: center;
   background: var(--accent);
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   box-shadow: 0 14px 28px -16px rgba(196, 131, 71, 0.9);
   color: var(--accent-ink);
   cursor: pointer;
@@ -355,10 +364,35 @@ input:focus-visible {
   cursor: default;
 }
 
+.soft-action {
+  background: var(--accent-wash-strong);
+  border: 0;
+  border-radius: var(--r-pill);
+  color: var(--accent-deep);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 9px 15px;
+}
+
+.soft-action:hover:not(:disabled) {
+  background: rgba(232, 160, 106, 0.3);
+}
+
+.soft-action:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.code-display .soft-action {
+  font-size: 14px;
+  padding: 12px 20px;
+}
+
 .ghost-action {
   background: rgba(43, 40, 37, 0.05);
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--ink-soft);
   cursor: pointer;
   font-size: 15px;
@@ -380,7 +414,7 @@ input:focus-visible {
 
 .form-error {
   background: var(--accent-wash);
-  border-radius: 14px;
+  border-radius: var(--r-sm);
   color: var(--accent-deep);
   font-size: 14px;
   font-weight: 700;
@@ -391,7 +425,7 @@ input:focus-visible {
 .resume-note {
   align-items: center;
   background: var(--sunk);
-  border-radius: 18px;
+  border-radius: var(--r-md);
   display: flex;
   flex-wrap: wrap;
   font-size: 14px;
@@ -406,16 +440,6 @@ input:focus-visible {
   margin-top: 4px;
 }
 
-.resume-note button {
-  background: var(--accent-wash-strong);
-  border: 0;
-  border-radius: 999px;
-  color: var(--accent-deep);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 800;
-  padding: 10px 16px;
-}
 
 /* ── 登入面板 ─────────────────────────────────────────── */
 
@@ -432,7 +456,7 @@ input:focus-visible {
 
 .account-panel {
   background: var(--card);
-  border-radius: 28px;
+  border-radius: var(--r-lg);
   box-shadow: 0 20px 50px -30px rgba(43, 40, 37, 0.5);
   display: flex;
   flex-direction: column;
@@ -489,6 +513,35 @@ input:focus-visible {
   margin: -12px 0 0;
 }
 
+.settings-list {
+  background: var(--sunk);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.settings-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  min-height: 84px;
+  padding: 18px;
+  text-align: left;
+  width: 100%;
+}
+
+.settings-row + .settings-row { border-top: 1px solid var(--hairline); }
+.settings-row:hover:not(:disabled) { background: var(--accent-wash); }
+.settings-row:focus-visible { outline-offset: -3px; }
+.settings-row:disabled { cursor: default; opacity: 0.5; }
+.settings-copy { display: grid; gap: 6px; min-width: 0; }
+.settings-copy strong { font-size: 15px; }
+.settings-copy small { color: var(--ink-muted); font-size: 12px; line-height: 1.6; }
+.settings-arrow { color: var(--accent-deep); flex: none; font-size: 22px; }
+
 .profile-heading {
   align-items: center;
   display: flex;
@@ -527,7 +580,7 @@ input:focus-visible {
 
 .profile-stats article {
   background: var(--sunk);
-  border-radius: 16px;
+  border-radius: var(--r-sm);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -623,7 +676,7 @@ input:focus-visible {
 .record-game {
   align-items: center;
   background: var(--sunk);
-  border-radius: 18px;
+  border-radius: var(--r-md);
   display: flex;
   gap: 12px;
   padding: 10px 14px;
@@ -637,7 +690,7 @@ input:focus-visible {
 
 .record-yazy {
   background: var(--accent-wash);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--accent-deep);
   font-size: 10px;
   font-style: normal;
@@ -652,7 +705,7 @@ input:focus-visible {
 
 .tab-badge {
   background: var(--accent);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--accent-ink);
   font-size: 11px;
   font-weight: 800;
@@ -708,7 +761,7 @@ input:focus-visible {
 .friend-row {
   align-items: center;
   background: var(--sunk);
-  border-radius: 18px;
+  border-radius: var(--r-md);
   display: flex;
   gap: 12px;
   padding: 10px 12px;
@@ -745,7 +798,7 @@ input:focus-visible {
 .friend-invite {
   background: var(--chip);
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--ink-soft);
   cursor: pointer;
   font-size: 13px;
@@ -806,7 +859,7 @@ input:focus-visible {
 .invite-list article {
   align-items: center;
   background: var(--card);
-  border-radius: 22px;
+  border-radius: var(--r-md);
   box-shadow: var(--lift-soft);
   display: flex;
   gap: 14px;
@@ -901,7 +954,7 @@ input:focus-visible {
 .history-stats article {
   align-items: center;
   background: var(--sunk);
-  border-radius: 14px;
+  border-radius: var(--r-sm);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -935,7 +988,7 @@ input:focus-visible {
 
 .history-list article {
   align-items: center;
-  border-radius: 14px;
+  border-radius: var(--r-sm);
   display: flex;
   justify-content: space-between;
   min-height: 52px;
@@ -966,7 +1019,7 @@ footer {
 .room-pill {
   align-items: center;
   background: var(--card);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   box-shadow: inset 0 0 0 1px var(--hairline);
   display: flex;
   font-size: 13px;
@@ -980,20 +1033,10 @@ footer {
   letter-spacing: 0.06em;
 }
 
-.room-pill button {
-  background: rgba(232, 160, 106, 0.2);
-  border: 0;
-  border-radius: 999px;
-  color: var(--accent-deep);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 800;
-  padding: 8px 15px;
-}
 
 .error-banner {
   background: var(--accent-wash);
-  border-radius: 16px;
+  border-radius: var(--r-sm);
   color: var(--accent-deep);
   font-size: 14px;
   font-weight: 700;
@@ -1013,7 +1056,7 @@ footer {
 
 .table-panel {
   background: var(--card);
-  border-radius: 28px;
+  border-radius: var(--r-lg);
   box-shadow: var(--lift);
   display: flex;
   flex: 1 1 0;
@@ -1061,7 +1104,7 @@ footer {
 .turn-timeout {
   align-items: center;
   background: var(--sunk);
-  border-radius: 16px;
+  border-radius: var(--r-sm);
   color: var(--ink-soft);
   display: flex;
   font-size: 13px;
@@ -1070,16 +1113,6 @@ footer {
   padding: 12px 16px;
 }
 
-.turn-timeout button {
-  background: var(--accent-wash-strong);
-  border: 0;
-  border-radius: 999px;
-  color: var(--accent-deep);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 800;
-  padding: 9px 14px;
-}
 
 .practice-label {
   font-size: 12px;
@@ -1090,7 +1123,7 @@ footer {
 .dice-tray {
   align-items: flex-end;
   background: var(--tray);
-  border-radius: 26px;
+  border-radius: var(--r-lg);
   display: flex;
   gap: clamp(5px, 1.4vw, 14px);
   justify-content: center;
@@ -1193,7 +1226,7 @@ footer {
 
 .die small {
   background: var(--accent);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   bottom: -13px;
   color: var(--accent-ink);
   font-size: 11px;
@@ -1225,7 +1258,7 @@ footer {
 .roll-status {
   align-items: center;
   background: var(--sunk-strong);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--ink-soft);
   display: flex;
   font-size: 17px;
@@ -1311,7 +1344,7 @@ footer {
 .score-panel {
   min-width: 0;
   background: var(--card);
-  border-radius: 28px;
+  border-radius: var(--r-lg);
   box-shadow: var(--lift);
   display: flex;
   flex: 0 0 396px;
@@ -1358,7 +1391,7 @@ footer {
 .score-player-tabs button {
   background: transparent;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--ink-soft);
   cursor: pointer;
   font-size: 13px;
@@ -1387,7 +1420,7 @@ footer {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--r-sm);
   color: inherit;
   display: flex;
   font-family: inherit;
@@ -1456,35 +1489,17 @@ button.score-row:hover:not(:disabled) {
 
 .best-tag {
   background: var(--accent-wash-strong);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--accent-deep);
   font-size: 11px;
   font-weight: 800;
   padding: 3px 8px;
 }
 
-/* 手機上先給六格，其餘收起來；桌機本來就是右邊整欄。 */
-.score-expand {
-  background: transparent;
-  border: 0;
-  border-radius: 999px;
-  color: var(--ink-soft);
-  cursor: pointer;
-  display: none;
-  font-size: 14px;
-  font-weight: 700;
-  margin-top: 10px;
-  min-height: 44px;
-}
-
-.score-expand:hover {
-  background: var(--sunk);
-}
-
 .bonus-row {
   align-items: center;
   background: var(--sunk);
-  border-radius: 16px;
+  border-radius: var(--r-sm);
   display: flex;
   justify-content: space-between;
   margin-top: 18px;
@@ -1507,7 +1522,7 @@ button.score-row:hover:not(:disabled) {
 .connecting-card,
 .results-card {
   background: var(--card);
-  border-radius: 28px;
+  border-radius: var(--r-lg);
   box-shadow: var(--lift);
   display: flex;
   flex-direction: column;
@@ -1573,7 +1588,7 @@ button.score-row:hover:not(:disabled) {
 .code-display {
   align-items: center;
   background: var(--sunk-strong);
-  border-radius: 20px;
+  border-radius: var(--r-md);
   display: flex;
   gap: 12px;
   padding: 16px 16px 16px 24px;
@@ -1585,16 +1600,6 @@ button.score-row:hover:not(:disabled) {
   letter-spacing: 0.14em;
 }
 
-.code-display button {
-  background: var(--accent-wash-strong);
-  border: 0;
-  border-radius: 999px;
-  color: var(--accent-deep);
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 800;
-  padding: 12px 20px;
-}
 
 .lobby-seats {
   display: flex;
@@ -1654,7 +1659,7 @@ button.score-row:hover:not(:disabled) {
 
 .podium-place {
   align-items: center;
-  border-radius: 20px;
+  border-radius: var(--r-md);
   display: flex;
   gap: 14px;
   min-height: 68px;
@@ -1858,7 +1863,7 @@ button.score-row:hover:not(:disabled) {
   }
 
   .join-card {
-    border-radius: 26px;
+    border-radius: var(--r-lg);
     box-shadow: var(--lift-soft);
     gap: 18px;
     padding: 20px;
@@ -1899,7 +1904,7 @@ button.score-row:hover:not(:disabled) {
   .account-dialog .account-panel { width: 100%; }
 
   .account-panel {
-    border-radius: 28px 28px 0 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
     max-height: 92vh;
     max-height: 92dvh;
     max-width: none;
@@ -1923,7 +1928,7 @@ button.score-row:hover:not(:disabled) {
   }
 
   .table-panel {
-    border-radius: 26px;
+    border-radius: var(--r-lg);
     box-shadow: var(--lift-soft);
     gap: 16px;
     padding: 22px 18px 20px;
@@ -1972,7 +1977,7 @@ button.score-row:hover:not(:disabled) {
   }
 
   .score-panel {
-    border-radius: 26px;
+    border-radius: var(--r-lg);
     box-shadow: var(--lift-soft);
     padding: 18px 12px;
   }
@@ -1983,11 +1988,6 @@ button.score-row:hover:not(:disabled) {
 
   .score-panel-heading strong {
     font-size: 22px;
-  }
-
-  /* 手機版預設顯示完整計分卡，仍可用按鈕手動收合。 */
-  .score-expand {
-    display: block;
   }
 
   .waiting-card,
@@ -2019,7 +2019,7 @@ button.score-row:hover:not(:disabled) {
   }
 }
 
-.concession-panel { margin-bottom: 1rem; padding: .8rem 1rem; border: 1px solid #d8d6cf; border-radius: 14px; }
+.concession-panel { margin-bottom: 1rem; padding: .8rem 1rem; border: 1px solid #d8d6cf; border-radius: var(--r-sm); }
 .concession-panel p { margin: .3rem 0; font-size: .85rem; line-height: 1.6; overflow-wrap: anywhere; }
 .concession-panel .ghost-action { margin-top: .5rem; }
 
@@ -2043,7 +2043,7 @@ button.score-row:hover:not(:disabled) {
 
 .table-menu-panel {
   background: var(--card);
-  border-radius: 20px;
+  border-radius: var(--r-md);
   box-shadow: 0 1px 2px rgba(43, 40, 37, 0.06), 0 18px 40px -16px rgba(43, 40, 37, 0.35);
   display: flex;
   flex-direction: column;
@@ -2059,7 +2059,7 @@ button.score-row:hover:not(:disabled) {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 14px;
+  border-radius: var(--r-sm);
   color: var(--ink);
   cursor: pointer;
   display: flex;
@@ -2080,7 +2080,7 @@ button.score-row:hover:not(:disabled) {
 
 .menu-switch {
   background: var(--chip);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   flex: none;
   height: 22px;
   position: relative;

@@ -49,6 +49,7 @@ export async function loadFinishedGames(
         userId: players.userId,
         name: players.name,
         seat: players.seat,
+        rematchReady: players.rematchReady,
         surrenderReason: players.surrenderReason,
       })
       .from(players)
@@ -67,6 +68,7 @@ export async function loadFinishedGames(
     code: room.code,
     finishedAt: room.finishedAt ?? room.updatedAt,
     players: (playersByRoom.get(room.id) ?? [])
+      .filter((player) => player.rematchReady === 1)
       .sort((a, b) => a.seat - b.seat)
       .map((player) => ({
         id: player.id,

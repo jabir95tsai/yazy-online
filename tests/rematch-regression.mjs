@@ -55,6 +55,10 @@ try {
   }
   assert.equal(await pages[1].getByRole("button", { name: "再開一局", exact: true }).count(), 0);
   await pages[0].getByRole("button", { name: "再開一局", exact: true }).click();
+  assert.equal((await get()).room.status, "waiting");
+  await act(host, "start", {}, 409);
+  await pages[1].getByRole("button", { name: "加入新一局", exact: true }).click();
+  await pages[0].getByRole("button", { name: "開始", exact: true }).click();
   for (const page of pages) {
     await page.getByRole("heading", { name: "這局結束了" }).waitFor({ state: "hidden", timeout: 15000 });
     await page.locator(".game-grid").waitFor({ state: "visible" });
@@ -94,6 +98,18 @@ try {
   // not catch WebKit's crash when it formatted the saved game timestamps.
   await pages[0].waitForFunction(() => document.body.innerText.includes("月") && document.body.innerText.includes("日"));
   assert.ok((await pages[0].locator("main").innerText()).length > 100);
+  await act(guest, "decline-rematch");
+  await act(host, "start", {}, 409);
+  const thirdContext = await browser.newContext();
+  const thirdResponse = await thirdContext.request.post(`${origin}/api/rooms/${host.code}/join`, { data: { name: "新局玩家" } });
+  assert.ok(thirdResponse.ok());
+  const third = await thirdResponse.json();
+  await act(host, "start");
+  await act(third, "surrender");
+  await act(host, "finish");
+  const declinedHistory = await post("/api/history", { sessions: [host] });
+  assert.equal(declinedHistory.games[0].players.some((p) => p.id === guest.playerId), false, "Declined spectators are excluded from the new game history");
+  await thirdContext.close();
   assert.deepEqual(errors, []);
   console.log("PASS same-room rematch, both mobile clients, credentials, host-only, resets, history and concurrent restart");
 } finally {

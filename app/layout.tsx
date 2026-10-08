@@ -26,8 +26,11 @@ export async function generateMetadata(): Promise<Metadata> {
       template: "%s｜yazy",
     },
     description,
+    manifest: "/manifest.webmanifest",
+    appleWebApp: { capable: true, title: "yazy", statusBarStyle: "default" },
     icons: {
       icon: "/favicon.svg",
+      apple: "/icons/apple-touch-icon.png",
     },
     openGraph: {
       title: "yazy battle!",

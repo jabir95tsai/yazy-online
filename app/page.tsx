@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -42,6 +43,7 @@ import { resultValue, type SurrenderReason } from "@/lib/match";
 import { Modal } from "./components/modal";
 import { Avatar } from "./components/avatar";
 import { Brand } from "./components/brand";
+import { InstallButton } from "./components/install-button";
 import { Button } from "./components/button";
 import { DiceTray, Die, HeroTray, StillDie, type DieSpriteHandle } from "./components/die";
 import { ErrorBanner, FormError, LiveDot, RecordNote } from "./components/feedback";
@@ -54,6 +56,7 @@ import { SegmentedTabs } from "./components/tabs";
 import { TurnCountdown } from "./components/turn-countdown";
 import { RequestScope } from "@/lib/request-scope";
 import { formatHistoryDate } from "@/lib/history-date";
+import { historyResult } from "@/lib/history-result";
 
 type RoomState = {
   room: {
@@ -72,7 +75,7 @@ type RoomState = {
     updatedAt: string;
     finishedAt: string | null;
   };
-  players: Array<{ id: string; userId: string | null; name: string; seat: number; surrenderReason: SurrenderReason }>;
+  players: Array<{ id: string; userId: string | null; name: string; seat: number; rematchReady?: number; surrenderReason: SurrenderReason }>;
   scores: Array<{ playerId: string; category: string; score: number }>;
 };
 
@@ -177,6 +180,10 @@ function readGame(game: HistoryGame) {
     lines,
     mine,
     winner: lines[0] ?? null,
+    result: mine ? historyResult(mine, lines.filter((line) => line !== mine)) : null,
+    winnerResult: lines[0] ? historyResult(lines[0], lines.slice(1)) : null,
+    concessions: lines.filter((line) => line.surrenderReason)
+      .map((line) => `${line.name}：${line.surrenderReason === "automatic" ? "自動投降" : "手動投降"}`).join("、"),
     place: mine ? placeFor(resultValue(mine.total, mine.surrenderReason), lines.map((line) => resultValue(line.total, line.surrenderReason))) : 0,
     yazy: Boolean(mine && hasYazy(mine)),
   };
@@ -225,7 +232,6 @@ export default function Home() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [scorePlayerId, setScorePlayerId] = useState<string | null>(null);
   /** Narrow screens show the first six rows until this is opened. */
-  const [scoreExpanded, setScoreExpanded] = useState(false);
   const [confirmSurrender, setConfirmSurrender] = useState(false);
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
   const tableMenuRef = useRef<HTMLDivElement | null>(null);
@@ -707,9 +713,20 @@ export default function Home() {
       }
       roomEtagRef.current = response.headers.get("etag");
       const turnChanged =
+        previous?.room.code !== next.room.code ||
         previous?.room.status !== next.room.status ||
         previous?.room.currentSeat !== next.room.currentSeat ||
         previous?.room.round !== next.room.round;
+      if (
+        turnChanged &&
+        session &&
+        next.room.status === "playing" &&
+        next.players.some(
+          (player) => player.id === session.playerId && player.seat === next.room.currentSeat,
+        )
+      ) {
+        setScorePlayerId(session.playerId);
+      }
       if (previous?.room.status === "finished" && next.room.status === "playing") {
         setShowFinalCards(false);
         setConfirmSurrender(false);
@@ -734,7 +751,7 @@ export default function Home() {
     } catch {
       if (!quiet && roomScope.current.accepts(signal)) setError("連線中斷，正在嘗試重新連線。");
     }
-  }, [revealRollResult]);
+  }, [revealRollResult, session]);
 
   // The frame loop keeps rescheduling itself, so leaving a game mid-roll would
   // otherwise leave one running against nodes that are no longer on the page.
@@ -747,7 +764,9 @@ export default function Home() {
     [],
   );
 
-  useEffect(() => {
+  // Restore the URL/session only on mount. Reading the latest fetchRoom must
+  // not make restoration reactive to the session that restoration itself sets.
+  const restoreInitialSession = useEffectEvent(() => {
     const params = new URLSearchParams(window.location.search);
     const code = (params.get("room") ?? "").toUpperCase().slice(0, 6);
     const sessions = readSessions();
@@ -780,7 +799,11 @@ export default function Home() {
     queueMicrotask(() => {
       void refreshHistory();
     });
-  }, [fetchRoom, refreshHistory]);
+  });
+
+  useEffect(() => {
+    restoreInitialSession();
+  }, []);
 
   /**
    * Keep an eye out for friends opening a table.
@@ -929,7 +952,17 @@ export default function Home() {
    * the row where the player already expects to find it.
    */
   const previewScores = useMemo(() => {
-    if (!state || !viewedPlayerIsRolling || state.room.rollsUsed === 0) {
+    // Wait for every die to finish landing and for the settled snapshot to
+    // match this roll. Otherwise the first roll scores an empty array, and
+    // rerolls expose the previous throw's scores while the dice are airborne.
+    if (
+      !state ||
+      !viewedPlayerIsRolling ||
+      state.room.rollsUsed === 0 ||
+      rolling ||
+      settledDice.length !== 5 ||
+      state.room.dice.some((value, index) => value !== settledDice[index])
+    ) {
       return new Map<CategoryId, number>();
     }
     const filled = new Set(viewedScores.map((score) => score.category));
@@ -939,7 +972,7 @@ export default function Home() {
       previews.set(category.id, scoreDice(category.id, settledDice));
     }
     return previews;
-  }, [settledDice, state, viewedPlayerIsRolling, viewedScores]);
+  }, [rolling, settledDice, state, viewedPlayerIsRolling, viewedScores]);
   const bestPreview = useMemo(
     () => recommendScore(previewScores, viewedScores),
     [previewScores, viewedScores],
@@ -957,6 +990,7 @@ export default function Home() {
   );
 
   function enterPractice() {
+    setSettingsPanelOpen(false);
     roomScope.current.reset();
     resetRollAnimation();
     const now = new Date().toISOString();
@@ -1260,11 +1294,11 @@ export default function Home() {
   }
 
   async function action(
-    actionName: "start" | "restart" | "roll" | "score" | "skip" | "surrender" | "finish",
+    actionName: "start" | "restart" | "accept-rematch" | "decline-rematch" | "roll" | "score" | "skip" | "surrender" | "finish",
     category?: CategoryId,
   ) {
     if (!session || !stateRef.current || actionBusyRef.current) return;
-    if (stateRef.current.room.practice) { practiceAction(actionName, category); return; }
+    if (stateRef.current.room.practice) { if (actionName !== "accept-rematch" && actionName !== "decline-rematch") practiceAction(actionName, category); return; }
     const signal = roomScope.current.signal;
     actionBusyRef.current = true;
     setBusy(true);
@@ -1745,12 +1779,13 @@ export default function Home() {
                         >
                           <div className="friend-copy">
                             <strong>
-                              第 {result.place} 名
+                              {result.result?.label} · 第 {result.place} 名
                               {result.yazy && <i className="record-yazy">YAZY</i>}
                             </strong>
                             <small>
                               {formatHistoryDate(game.finishedAt)} ·{" "}
                               {result.lines.length} 人 · 勝者 {result.winner?.total} 分
+                              {result.concessions && ` · ${result.concessions}`}
                             </small>
                           </div>
                           <b>{result.mine?.total}</b>
@@ -1946,14 +1981,29 @@ export default function Home() {
           ×
         </button>
         <h2>設定</h2>
-        <div className="profile-actions">
-          <Button
-            aria-pressed={soundEnabled}
+        <p className="account-intro">調整遊戲體驗，或先自己練習一局。</p>
+        <div className="settings-list">
+          <button
+            type="button"
+            role="switch"
+            aria-label="落地音效"
+            aria-checked={soundEnabled}
+            className="settings-row"
             onClick={toggleSound}
-            variant="toggle"
           >
-            落地音效{soundEnabled ? "開" : "關"}
-          </Button>
+            <span className="settings-copy">
+              <strong>落地音效</strong>
+              <small>骰子落下時播放聲音 · {soundEnabled ? "已開啟" : "已關閉"}</small>
+            </span>
+            <span className="menu-switch" aria-hidden="true" />
+          </button>
+          <button type="button" className="settings-row" disabled={busy} onClick={enterPractice}>
+            <span className="settings-copy">
+              <strong>測試模式</strong>
+              <small>單人練習擲骰與計分，不計入戰績</small>
+            </span>
+            <span className="settings-arrow" aria-hidden="true">→</span>
+          </button>
         </div>
     </Modal>
   ) : null;
@@ -1999,7 +2049,7 @@ export default function Home() {
             </button>
           ))}
         </div>
-        <div className={`score-list ${scoreExpanded ? "" : "collapsed"}`}>
+        <div className="score-list">
           {categories.map((category) => {
             const saved = viewedScores.find((score) => score.category === category.id);
             const preview = previewScores.get(category.id);
@@ -2011,7 +2061,7 @@ export default function Home() {
             const tag =
               bestPreview?.id === category.id
                 ? {
-                    text: bestPreview.bonusGain ? "含獎勵最多分" : "目前最多分",
+                    text: "建議",
                     title: `現在填入可增加 ${bestPreview.gain} 分${bestPreview.bonusGain ? "（含上半部獎勵 35 分）" : ""}；同分優先特殊牌型。未計算後續擲骰策略。`,
                   }
                 : undefined;
@@ -2031,13 +2081,6 @@ export default function Home() {
             );
           })}
         </div>
-        <button
-          className="score-expand"
-          onClick={() => setScoreExpanded((open) => !open)}
-          type="button"
-        >
-          {scoreExpanded ? "收起來" : "看全部 13 格"}
-        </button>
         <BonusRow bonus={viewedSummary.bonus} upper={viewedSummary.upper} />
       </aside>
     );
@@ -2123,7 +2166,7 @@ export default function Home() {
                 <Seat
                   key={player.id}
                   name={player.name}
-                  suffix={player.id === session.playerId ? "（你）" : ""}
+                  suffix={`${player.id === session.playerId ? "（你）" : ""}${player.rematchReady === 0 ? "・等待回覆" : player.rematchReady === -1 ? "・觀戰" : ""}`}
                 />
               ))}
               <Seat />
@@ -2158,7 +2201,7 @@ export default function Home() {
             )}
             {state.room.hostPlayerId === session.playerId ? (
               <Button
-                disabled={busy || state.players.length < 2}
+                disabled={busy || state.players.filter((player) => player.rematchReady !== -1).length < 2 || state.players.some((player) => player.rematchReady === 0)}
                 onClick={() => action("start")}
               >
                 {state.players.length < 2 ? "再等一個人" : "開始"}
@@ -2170,6 +2213,15 @@ export default function Home() {
               </div>
             )}
           </section>
+        )}
+
+        {state.room.status === "waiting" && me?.rematchReady === 0 && (
+          <Modal label="是否加入新一局" onClose={() => {}}>
+            <h2>要加入新一局嗎？</h2>
+            <p>房主邀請大家再玩一局，確認後才會開始。</p>
+            <Button disabled={busy} onClick={() => action("accept-rematch")}>加入新一局</Button>
+            <Button disabled={busy} variant="ghost" onClick={() => action("decline-rematch")}>這次不加入</Button>
+          </Modal>
         )}
 
         {state.room.status === "playing" && (
@@ -2292,7 +2344,7 @@ export default function Home() {
                       detail={<>{summary.total}{player.surrenderReason ? ` · ${player.surrenderReason === "automatic" ? "自動投降" : "已投降"}` : ""}</>}
                       key={player.id}
                       name={player.name}
-                      suffix={player.id === session.playerId ? "（你）" : ""}
+                      suffix={`${player.id === session.playerId ? "（你）" : ""}${player.rematchReady === 0 ? "・等待回覆" : player.rematchReady === -1 ? "・觀戰" : ""}`}
                     />
                   );
                 })}
@@ -2356,6 +2408,7 @@ export default function Home() {
       <header className="landing-nav">
         <Brand />
         <div className="nav-actions">
+          <InstallButton />
           <button className="account-trigger" onClick={openAccountPanel} type="button">
             <span>{account?.displayName.slice(0, 1).toUpperCase() ?? "人"}</span>
             {account ? account.displayName : "登入"}
@@ -2410,9 +2463,9 @@ export default function Home() {
                   這台裝置上次在 {resumable.code} 那桌是「{resumable.name}」。
                   <small>想換個人玩，直接在下面填新名字就好。</small>
                 </span>
-                <button onClick={() => resumeAs(resumable)} type="button">
+                <Button variant="soft" onClick={() => resumeAs(resumable)}>
                   以「{resumable.name}」繼續
-                </button>
+                </Button>
               </div>
             )}
             <label>
@@ -2450,7 +2503,6 @@ export default function Home() {
             >
               {busy ? "正在鋪桌子…" : mode === "create" ? "開一桌" : "進去"}
             </Button>
-            <Button disabled={busy} onClick={enterPractice} variant="ghost">測試模式</Button>
             <p className="privacy-note">
               {account
                 ? "可以自訂這桌的名字，分數仍會存到你的帳號。"
@@ -2537,12 +2589,13 @@ export default function Home() {
                 <article key={`${game.code}-${game.finishedAt}`}>
                   <strong>
                     {result.mine
-                      ? `第 ${result.place} 名 · ${result.mine.total} 分`
-                      : `${result.winner?.name} 獲勝`}
+                      ? `${result.result?.label} · 第 ${result.place} 名 · ${result.mine.total} 分`
+                      : `${result.winner?.name} ${result.winnerResult?.label ?? ""}`}
                   </strong>
                   <b>
                     {result.mine ? `勝者 ${result.winner?.total} 分` : result.winner?.total} ·{" "}
                     {formatHistoryDate(game.finishedAt)}
+                    {result.concessions && ` · ${result.concessions}`}
                   </b>
                 </article>
               );

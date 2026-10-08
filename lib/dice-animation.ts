@@ -330,14 +330,11 @@ export const NOMINAL_THROW_MS = MIN_FLIGHT_MS + SETTLE_MS;
 /** How long the reduced-motion pose takes to finish. */
 export const REDUCED_THROW_MS = 367;
 
-/**
- * The die leaves the hand at rest and reaches full spin over this long, so it
- * does not start at speed. Velocity ramps linearly, so the angle stays smooth.
- */
-const SPIN_RAMP_MS = 180;
-const spinPhase = (t: number) =>
-  t <= SPIN_RAMP_MS ? (t * t) / (2 * SPIN_RAMP_MS) : t - SPIN_RAMP_MS / 2;
-const NOMINAL_SPIN_PHASE = spinPhase(NOMINAL_FLIGHT_MS);
+// Keep normal angular speed unchanged during launch and network waiting.
+const WAIT_SPIN_SPEED = 1;
+const spinPhase = (t: number) => Math.max(0, t) * WAIT_SPIN_SPEED;
+// Keep the original angular speed independent of the shortened flight.
+const NOMINAL_SPIN_PHASE = 1210;
 /**
  * Pinned so a nominal flight sweeps exactly what the design swept: yaw from
  * -38 degrees to two full turns, pitch from -22 to three.
@@ -401,8 +398,9 @@ function tumble(profile: DieProfile, flightMs: number, base: Mat3): Mat3 {
  */
 function spinVelocity(profile: DieProfile, yawDeg: number): Vec3 {
   const pitchAxis = mv(rotM([0, 1, 0], yawDeg * RAD), nrm([1, 0, profile.tilt]));
-  const yawTerm = YAW_RATE * profile.yawSign * profile.rate * RAD;
-  const pitchTerm = PITCH_RATE * profile.pitchSign * profile.rate * RAD;
+  const speed = WAIT_SPIN_SPEED;
+  const yawTerm = YAW_RATE * profile.yawSign * profile.rate * RAD * speed;
+  const pitchTerm = PITCH_RATE * profile.pitchSign * profile.rate * RAD * speed;
   return [
     pitchAxis[0] * pitchTerm,
     yawTerm + pitchAxis[1] * pitchTerm,
@@ -468,6 +466,8 @@ function resolveRotation(
   // The correction winds down from its angle to 0, so the die turns about
   // -axis. Flip so that is the way it was already going.
   const omega = spinVelocity(profile, yawAt(profile, phase));
+  // A slowly waiting die takes the shortest landing path without extra turns.
+  if (Math.hypot(...omega) < 0.005) return { axis, angle, power: 2 };
   const forward = dot(axis, omega) > 0 ? -1 : 1;
   const signed = forward > 0 ? angle : 2 * Math.PI - angle;
 
@@ -492,7 +492,7 @@ export function scheduleContact(startedAt: number, now: number, stagger: number)
   const natural = startedAt + MIN_FLIGHT_MS + stagger;
   // A late answer cannot pull the die out of the air instantly — it still has
   // to fall. The drop is compressed rather than skipped.
-  return Math.max(natural, now + MIN_DESCENT_MS + stagger);
+  return Math.max(natural, now + Math.max(MIN_DESCENT_MS, RESOLVE_MS) + stagger);
 }
 
 /** The resting pose: what a die that is not being thrown looks like. */
@@ -586,7 +586,7 @@ export function renderThrow(spec: Throw, now: number): DieRender {
   /* residual screen-space roll, on top of the real 3D turn */
   let rot = 0;
   if (t >= CROUCH_MS && now < contact) {
-    rot = Math.sin(seg(now, startedAt + CROUCH_MS, contact) * Math.PI * 2) * -9;
+    rot = Math.sin(seg(t, CROUCH_MS, MIN_FLIGHT_MS) * Math.PI * 2) * -9;
   } else if (sinceContact >= 0 && sinceContact < SETTLE_MS) {
     const u = seg(sinceContact, 0, SETTLE_MS);
     rot = (1 - u) * Math.sin(u * Math.PI * 2.6) * 5;

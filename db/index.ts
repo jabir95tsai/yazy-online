@@ -124,6 +124,9 @@ export function ensureSchema() {
       ])
       .then(async () => {
         const columns = await d1.prepare("PRAGMA table_info(players)").all<{ name: string }>();
+        if (!columns.results.some((column) => column.name === "rematch_ready")) {
+          await d1.prepare("ALTER TABLE players ADD COLUMN rematch_ready INTEGER NOT NULL DEFAULT 1").run();
+        }
         if (!columns.results.some((column) => column.name === "surrender_reason")) {
           await d1.prepare("ALTER TABLE players ADD COLUMN surrender_reason TEXT").run();
         }

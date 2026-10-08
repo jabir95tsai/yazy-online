@@ -1,0 +1,1 @@
+ALTER TABLE players ADD COLUMN rematch_ready INTEGER NOT NULL DEFAULT 1;

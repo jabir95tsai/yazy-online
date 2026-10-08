@@ -70,6 +70,7 @@ export const players = sqliteTable(
     seat: integer("seat").notNull(),
     tokenHash: text("token_hash").notNull(),
     joinedAt: text("joined_at").notNull(),
+    rematchReady: integer("rematch_ready").notNull().default(1),
     surrenderReason: text("surrender_reason", { enum: ["manual", "automatic"] }),
   },
   (table) => [

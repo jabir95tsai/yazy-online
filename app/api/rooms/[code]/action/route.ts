@@ -7,7 +7,7 @@ import { apiError, cleanCode, hashToken } from "@/lib/server";
 import { loadFinishedGames } from "@/lib/history";
 
 type ActionBody = {
-  action?: "start" | "restart" | "roll" | "hold" | "score" | "skip" | "surrender" | "finish";
+  action?: "start" | "restart" | "accept-rematch" | "decline-rematch" | "roll" | "hold" | "score" | "skip" | "surrender" | "finish";
   playerId?: string;
   token?: string;
   held?: boolean[];
@@ -112,6 +112,7 @@ export async function POST(
           tokenHash: players.tokenHash,
           joinedAt: players.joinedAt,
           surrenderReason: players.surrenderReason,
+          rematchReady: players.rematchReady,
         })
         .from(players)
         .innerJoin(rooms, eq(players.roomId, rooms.id))
@@ -150,29 +151,48 @@ export async function POST(
       // Snapshot and reset share a CAS-owned transaction. Losing requests cannot
       // archive twice or erase scores from the newly started game.
       const [result] = await d1.batch([
-        d1.prepare(`UPDATE rooms SET status = 'playing', current_seat = 0, round = 1,
+        d1.prepare(`UPDATE rooms SET status = 'waiting', current_seat = 0, round = 1,
           dice_json = '[]', held_json = ?, rolls_used = 0, finished_at = NULL,
-          turn_deadline = ?, updated_at = ? WHERE id = ? AND status = 'finished' AND updated_at = ?`)
-          .bind(JSON.stringify(emptyHeld), turnDeadline(), updatedAt, room.id, room.updatedAt),
+          turn_deadline = NULL, updated_at = ? WHERE id = ? AND status = 'finished' AND updated_at = ?`)
+          .bind(JSON.stringify(emptyHeld), updatedAt, room.id, room.updatedAt),
         d1.prepare(`INSERT INTO room_games (room_id, finished_at, game_json)
           SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
           .bind(room.id, game.finishedAt, JSON.stringify(game), room.id, updatedAt),
         d1.prepare(`DELETE FROM scores WHERE room_id = ?
           AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
           .bind(room.id, room.id, updatedAt),
-        d1.prepare(`UPDATE players SET surrender_reason = NULL WHERE room_id = ?
+        d1.prepare(`UPDATE players SET surrender_reason = NULL, rematch_ready = CASE WHEN id = ? THEN 1 ELSE 0 END WHERE room_id = ?
           AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
-          .bind(room.id, room.id, updatedAt),
+          .bind(player.id, room.id, room.id, updatedAt),
       ]);
       return resultChanged(result) ? Response.json({ ok: true })
         : Response.json({ error: "房間狀態已變更，請重新整理。" }, { status: 409 });
+    }
+
+    if (body.action === "accept-rematch" || body.action === "decline-rematch") {
+      if (room.status !== "waiting" || player.rematchReady !== 0) {
+        return Response.json({ error: "目前沒有待確認的新局邀請。" }, { status: 409 });
+      }
+      const updatedAt = `${nextTimestamp(room.updatedAt).slice(0, -1)}${Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString().padStart(10, "0")).join("")}Z`;
+      const d1 = getD1();
+      const [result] = await d1.batch([
+        d1.prepare("UPDATE rooms SET updated_at = ? WHERE id = ? AND status = 'waiting' AND updated_at = ?")
+          .bind(updatedAt, room.id, room.updatedAt),
+        d1.prepare(`UPDATE players SET rematch_ready = ?, surrender_reason = ? WHERE id = ? AND room_id = ?
+          AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
+          .bind(body.action === "accept-rematch" ? 1 : -1, body.action === "accept-rematch" ? null : "manual", player.id, room.id, room.id, updatedAt),
+      ]);
+      return resultChanged(result) ? Response.json({ ok: true }) : Response.json({ error: "房間狀態已變更，請重試。" }, { status: 409 });
     }
 
     if (body.action === "start") {
       if (room.status !== "waiting" || player.id !== room.hostPlayerId) {
         return Response.json({ error: "只有房主能開始遊戲。" }, { status: 403 });
       }
-      if (roomPlayers.length < 2) {
+      if (roomPlayers.some((entry) => entry.rematchReady === 0)) {
+        return Response.json({ error: "請等待所有玩家回覆是否加入。" }, { status: 409 });
+      }
+      if (roomPlayers.filter((entry) => entry.rematchReady === 1).length < 2) {
         return Response.json({ error: "至少需要 2 位玩家才能開始。" }, { status: 409 });
       }
       const result = await db

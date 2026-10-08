@@ -1,5 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { dieProfile, renderThrow, renderResting, scheduleContact } from "../lib/dice-animation.ts";
+
+test("slow roll responses keep moving and land on every authoritative face", () => {
+  for (let index = 0; index < 5; index++) {
+    const waiting = { startedAt: 0, airborneFace: index + 1, target: null, contactAt: null, profile: dieProfile(index) };
+    assert.notDeepEqual(renderThrow(waiting, 1500), renderThrow(waiting, 1750));
+    for (let target = 1; target <= 6; target++) {
+      const contactAt = scheduleContact(0, 5000, 0);
+      const resolved = { ...waiting, target, contactAt };
+      const arrival = renderThrow(resolved, 5000);
+      const before = renderThrow(waiting, 5000);
+      assert.equal(arrival.transform, before.transform);
+      arrival.faces.forEach((face, i) => {
+        assert.equal(face.points, before.faces[i].points);
+        assert.equal(face.matrix, before.faces[i].matrix);
+        assert.ok(Math.abs(face.shade - before.faces[i].shade) < 1e-10);
+      });
+      assert.deepEqual(renderThrow(resolved, contactAt + 400), renderResting(target));
+    }
+  }
+});
 import {
   findResumableSession,
   selectBrowserSession,
@@ -8,6 +29,23 @@ import {
 } from "../lib/browser-session.ts";
 import { abandonedRoomCutoff } from "../lib/cleanup.ts";
 import { formatHistoryDate } from "../lib/history-date.ts";
+import { historyResult } from "../lib/history-result.ts";
+
+test("history distinguishes concession wins from score wins and preserves concession reasons", () => {
+  const winner = { total: 1 };
+  const manual = { total: 50, surrenderReason: "manual" };
+  const automatic = { total: 30, surrenderReason: "automatic" };
+  assert.equal(historyResult(winner, [manual, automatic]).wonBySurrender, true);
+  assert.equal(historyResult(winner, [manual, automatic]).label, "對手投降獲勝");
+  assert.equal(historyResult(manual, [winner]).label, "手動投降（敗）");
+  assert.equal(historyResult(automatic, [winner]).label, "自動投降（敗）");
+  assert.equal(historyResult({ total: 60 }, [manual, { total: 20 }]).wonBySurrender, false);
+  assert.equal(historyResult({ total: 60 }, [manual, { total: 20 }]).label, "獲勝");
+  assert.equal(historyResult(winner, [{ total: 1 }, manual]).label, "平手");
+  assert.equal(historyResult(winner, [{ total: 2 }]).label, "落敗");
+  assert.equal(historyResult(winner, []).label, "單人對局");
+  assert.equal(historyResult(winner, []).wonBySurrender, false);
+});
 
 test("history dates support extended room timestamps and invalid legacy values", () => {
   const standard = "2026-09-26T12:00:00.123Z";
