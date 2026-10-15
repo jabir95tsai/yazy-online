@@ -1,7 +1,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { ensureSchema, getD1, getDb } from "@/db";
 import { players, rooms, scores } from "@/db/schema";
-import { categoryIds, fairDieFromByte, scoreDice, type CategoryId } from "@/lib/game";
+import { addTurnScore, categoryIds, fairDieFromByte, scoreTurn, YAZY_BONUS, type CategoryId } from "@/lib/game";
 import { resolveMatch, type MatchPlayer, type MatchScore } from "@/lib/match";
 import { apiError, cleanCode, hashToken } from "@/lib/server";
 import { loadFinishedGames } from "@/lib/history";
@@ -58,8 +58,8 @@ function rollDie() {
 // One CAS-controlled transaction owns the room, scores and concession states.
 // The unique timestamp suffix prevents a losing concurrent request from writing.
 async function commitMatch(room: RoomRow, roomPlayers: MatchPlayer[], roomScores: MatchScore[],
-  options: { score?: MatchScore; surrender?: string; finish?: boolean; advance?: boolean }) {
-  const afterScores = options.score ? [...roomScores, options.score] : roomScores;
+  options: { score?: MatchScore; bonus?: number; surrender?: string; finish?: boolean; advance?: boolean }) {
+  const afterScores = options.score ? addTurnScore(roomScores, options.score, options.bonus ?? 0) : roomScores;
   const next = resolveMatch(roomPlayers, afterScores, room.currentSeat, !!options.advance, options.surrender);
   const complete = !!options.finish || next.complete;
   const resetTurn = !!options.advance || next.nextSeat !== room.currentSeat || complete;
@@ -79,6 +79,12 @@ async function commitMatch(room: RoomRow, roomPlayers: MatchPlayer[], roomScores
     statements.push(d1.prepare(`INSERT INTO scores (room_id, player_id, category, score, created_at)
       SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
       .bind(room.id, score.playerId, score.category, score.score, updatedAt, room.id, updatedAt));
+    if (options.bonus) {
+      statements.push(d1.prepare(`INSERT INTO scores (room_id, player_id, category, score, created_at)
+        SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)
+        ON CONFLICT (room_id, player_id, category) DO UPDATE SET score = score + excluded.score`)
+        .bind(room.id, score.playerId, YAZY_BONUS, options.bonus, updatedAt, room.id, updatedAt));
+    }
   }
   for (const player of next.players) {
     if (player.surrenderReason !== roomPlayers.find((entry) => entry.id === player.id)?.surrenderReason) {
@@ -341,9 +347,10 @@ export async function POST(
       if (roomScores.some((entry) => entry.playerId === player.id && entry.category === body.category)) {
         return Response.json({ error: "這個計分格已使用。" }, { status: 409 });
       }
-      const value = scoreDice(body.category, JSON.parse(room.diceJson) as number[]);
+      const { score: value, bonus } = scoreTurn(body.category, JSON.parse(room.diceJson) as number[],
+        roomScores.filter((entry) => entry.playerId === player.id));
       const next = await commitMatch(room, roomPlayers, roomScores, {
-        score: { playerId: player.id, category: body.category, score: value }, advance: true,
+        score: { playerId: player.id, category: body.category, score: value }, bonus, advance: true,
       });
       if (!next) {
         return Response.json(
@@ -351,7 +358,7 @@ export async function POST(
           { status: 409 },
         );
       }
-      return Response.json({ ok: true, score: value, complete: next.complete });
+      return Response.json({ ok: true, score: value, bonus, complete: next.complete });
     }
 
     return Response.json({ error: "不支援的操作。" }, { status: 400 });

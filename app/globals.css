@@ -1506,6 +1506,10 @@ button.score-row:hover:not(:disabled) {
   padding: 16px;
 }
 
+.bonus-row + .bonus-row {
+  margin-top: 8px;
+}
+
 .bonus-row > span {
   color: var(--ink-soft);
   font-size: 13px;

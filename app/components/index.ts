@@ -11,7 +11,7 @@ export { FriendAction, FriendActions, FriendRow, HeadToHead } from "./friend-row
 export { Modal } from "./modal";
 export { LobbySeats, PlayerChip, Podium, Seat, type PodiumEntry } from "./players";
 export { RoomCode } from "./room-code";
-export { BonusRow, ScoreRow } from "./score-row";
+export { BonusRow, ScoreRow, YazyBonusRow } from "./score-row";
 export { StatGrid, type Stat } from "./stat-grid";
 export { SegmentedTabs, type TabItem } from "./tabs";
 export { TurnCountdown } from "./turn-countdown";

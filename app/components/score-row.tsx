@@ -74,3 +74,17 @@ export function BonusRow({ upper, bonus }: { upper: number; bonus: number }) {
     </div>
   );
 }
+
+/**
+ * Running total of +100 bonuses for every YAZY rolled after a scored 50.
+ *
+ * @category Scorecard
+ */
+export function YazyBonusRow({ bonus }: { bonus: number }) {
+  return (
+    <div className="bonus-row">
+      <span>YAZY 獎勵 ×{bonus / 100}</span>
+      <strong>+{bonus}</strong>
+    </div>
+  );
+}

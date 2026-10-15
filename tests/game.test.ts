@@ -55,7 +55,7 @@ test("history dates support extended room timestamps and invalid legacy values",
   assert.equal(formatHistoryDate(""), "日期不明");
 });
 import { maximumFinalScore, resolveMatch, type MatchPlayer } from "../lib/match.ts";
-import { categoryIds, fairDieFromByte, recommendScore, scoreDice, scoreSummary } from "../lib/game.ts";
+import { addTurnScore, categoryIds, fairDieFromByte, filledCount, recommendScore, scoreDice, scoreSummary, scoreTurn } from "../lib/game.ts";
 import {
   LEGACY_PBKDF2_ITERATIONS,
   parseHash,
@@ -167,7 +167,26 @@ test("adds the upper-section bonus at 63", () => {
     { category: "sixes", score: 18 },
     { category: "chance", score: 20 },
   ]);
-  assert.deepEqual(summary, { upper: 63, bonus: 35, lower: 20, total: 118 });
+  assert.deepEqual(summary, { upper: 63, bonus: 35, lower: 20, yazyBonus: 0, total: 118 });
+});
+
+test("every extra YAZY after a scored 50 earns +100 with Joker values", () => {
+  const yazy = [4, 4, 4, 4, 4];
+  assert.deepEqual(scoreTurn("yazy", yazy, []), { score: 50, bonus: 0 });
+  let entries = [{ category: "yazy", score: 50 }];
+  assert.deepEqual(scoreTurn("fours", yazy, entries), { score: 20, bonus: 100 });
+  assert.deepEqual(scoreTurn("fullHouse", yazy, entries), { score: 25, bonus: 100 });
+  assert.deepEqual(scoreTurn("largeStraight", yazy, entries), { score: 40, bonus: 100 });
+  assert.deepEqual(scoreTurn("fullHouse", [2, 2, 3, 3, 3], entries), { score: 25, bonus: 0 });
+  for (const category of ["fours", "fullHouse", "chance"] as const) {
+    const turn = scoreTurn(category, yazy, entries);
+    entries = addTurnScore(entries, { category, score: turn.score }, turn.bonus);
+  }
+  assert.equal(filledCount(entries), 4);
+  assert.deepEqual(entries.filter((entry) => entry.category === "yazyBonus"), [{ category: "yazyBonus", score: 300 }]);
+  assert.equal(scoreSummary(entries).total, 50 + 20 + 25 + 20 + 300);
+  // A zeroed YAZY box still allows the Joker but never the bonus.
+  assert.deepEqual(scoreTurn("smallStraight", yazy, [{ category: "yazy", score: 0 }]), { score: 30, bonus: 0 });
 });
 
 test("maps accepted random bytes evenly across all six faces", () => {
@@ -334,14 +353,15 @@ test("head-to-head can find you by account when the seats are unmarked", () => {
 
 
 test("maximum score includes reachable bonus and treats zero as a filled category", () => {
-  assert.equal(maximumFinalScore([]), 375);
+  assert.equal(maximumFinalScore([]), 375 + 1200); // every box after the first YAZY could earn +100
   assert.equal(maximumFinalScore([{ category: "yazy", score: 0 }]), 325);
+  assert.equal(maximumFinalScore([{ category: "yazy", score: 50 }, { category: "yazyBonus", score: 100 }]), 475 + 1200);
   const noBonus = categoryIds.slice(0, 6).map((category) => ({ category, score: 0 }));
-  assert.equal(maximumFinalScore(noBonus), 235);
+  assert.equal(maximumFinalScore(noBonus), 235 + 600);
   const almost = [{ category: "ones", score: 3 }, { category: "twos", score: 6 },
     { category: "threes", score: 9 }, { category: "fours", score: 12 }, { category: "fives", score: 5 }];
-  assert.equal(maximumFinalScore(almost), 335); // 65 upper + 35 bonus + 235 lower
-  assert.equal(maximumFinalScore([...almost, { category: "sixes", score: 0 }]), 270);
+  assert.equal(maximumFinalScore(almost), 335 + 700); // 65 upper + 35 bonus + 235 lower + 7 YAZY bonuses
+  assert.equal(maximumFinalScore([...almost, { category: "sixes", score: 0 }]), 270 + 600);
 });
 
 const matchPlayers: MatchPlayer[] = [0, 1, 2].map((seat) => ({ id: `p${seat}`, seat, surrenderReason: null }));

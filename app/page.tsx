@@ -19,11 +19,13 @@ import {
   type Throw,
 } from "@/lib/dice-animation";
 import {
+  addTurnScore,
   categories,
   fairDieFromByte,
+  filledCount,
   recommendScore,
-  scoreDice,
   scoreSummary,
+  scoreTurn,
   type CategoryId,
 } from "@/lib/game";
 import {
@@ -50,7 +52,7 @@ import { ErrorBanner, FormError, LiveDot, RecordNote } from "./components/feedba
 import { FriendAction, FriendActions, FriendRow, HeadToHead } from "./components/friend-row";
 import { LobbySeats, PlayerChip, Podium, Seat } from "./components/players";
 import { RoomCode } from "./components/room-code";
-import { BonusRow, ScoreRow } from "./components/score-row";
+import { BonusRow, ScoreRow, YazyBonusRow } from "./components/score-row";
 import { StatGrid } from "./components/stat-grid";
 import { SegmentedTabs } from "./components/tabs";
 import { TurnCountdown } from "./components/turn-countdown";
@@ -148,7 +150,7 @@ type DieAnimation =
 
 const SESSION_KEY = "yazy-club-sessions";
 const ACTIVE_SESSION_PREFIX = "yazy-club-active-player";
-const EMPTY_SCORE_SUMMARY = { upper: 0, bonus: 0, lower: 0, total: 0 };
+const EMPTY_SCORE_SUMMARY = { upper: 0, bonus: 0, lower: 0, yazyBonus: 0, total: 0 };
 const NO_DICE_IN_FLIGHT = [false, false, false, false, false];
 const NO_FRIENDS: FriendsPayload = {
   friends: [],
@@ -969,7 +971,7 @@ export default function Home() {
     const previews = new Map<CategoryId, number>();
     for (const category of categories) {
       if (filled.has(category.id)) continue;
-      previews.set(category.id, scoreDice(category.id, settledDice));
+      previews.set(category.id, scoreTurn(category.id, settledDice, viewedScores).score);
     }
     return previews;
   }, [rolling, settledDice, state, viewedPlayerIsRolling, viewedScores]);
@@ -1036,13 +1038,14 @@ export default function Home() {
       revealRollResult(next.room.held, dice);
     } else if (actionName === "score" && category && current.room.rollsUsed > 0 &&
       !current.scores.some(score => score.category === category)) {
-      const scores = [...current.scores, { playerId: "practice", category, score: scoreDice(category, current.room.dice) }];
-      const finished = scores.length === categories.length;
+      const turn = scoreTurn(category, current.room.dice, current.scores);
+      const scores = addTurnScore(current.scores, { playerId: "practice", category, score: turn.score }, turn.bonus);
+      const finished = filledCount(scores) === categories.length;
       const held = [false, false, false, false, false];
       heldRef.current = held;
       setHeld(held);
       next = { ...current, scores, room: { ...current.room, dice: [], held, rollsUsed: 0,
-        round: Math.min(13, scores.length + 1), status: finished ? "finished" : "playing",
+        round: Math.min(13, filledCount(scores) + 1), status: finished ? "finished" : "playing",
         finishedAt: finished ? new Date().toISOString() : null } };
     } else return;
     stateRef.current = next;
@@ -2082,6 +2085,7 @@ export default function Home() {
           })}
         </div>
         <BonusRow bonus={viewedSummary.bonus} upper={viewedSummary.upper} />
+        {viewedSummary.yazyBonus > 0 && <YazyBonusRow bonus={viewedSummary.yazyBonus} />}
       </aside>
     );
 

@@ -1,16 +1,22 @@
-import { categoryIds, scoreSummary } from "./game.ts";
+import { categoryIds, filledCount, scoreSummary, YAZY_BONUS, YAZY_BONUS_VALUE } from "./game.ts";
 
 export type SurrenderReason = "manual" | "automatic" | null;
 export type MatchPlayer = { id: string; seat: number; surrenderReason: SurrenderReason };
 export type MatchScore = { playerId: string; category: string; score: number };
 const maximums = [5, 10, 15, 20, 25, 30, 30, 30, 25, 30, 40, 50, 30];
 
-/** Optimistic final total, including the bonus only if 63 remains reachable. */
+/**
+ * Optimistic final total, including the upper bonus only if 63 remains
+ * reachable and a +100 extra-YAZY bonus for every open box that could earn one.
+ */
 export function maximumFinalScore(entries: Array<{ category: string; score: number }>) {
   const saved = new Map(entries.map((entry) => [entry.category, entry.score]));
-  return scoreSummary(categoryIds.map((category, index) => ({
+  const open = categoryIds.length - filledCount(entries);
+  const yazy = saved.get("yazy");
+  const futureBonus = yazy === undefined ? Math.max(0, open - 1) : yazy > 0 ? open : 0;
+  return scoreSummary([...categoryIds.map((category, index) => ({
     category, score: saved.get(category) ?? maximums[index],
-  }))).total;
+  })), { category: YAZY_BONUS, score: (saved.get(YAZY_BONUS) ?? 0) + futureBonus * YAZY_BONUS_VALUE }]).total;
 }
 
 export function resolveMatch(players: MatchPlayer[], scores: MatchScore[], currentSeat: number,
@@ -19,20 +25,21 @@ export function resolveMatch(players: MatchPlayer[], scores: MatchScore[], curre
     surrenderReason: player.id === manualPlayerId ? "manual" as const : player.surrenderReason,
   }));
   const entries = (id: string) => scores.filter((score) => score.playerId === id);
+  const filled = (id: string) => filledCount(entries(id));
   const active = nextPlayers.filter((player) => !player.surrenderReason);
   const best = Math.max(...active.map((player) => scoreSummary(entries(player.id)).total));
   // Keep ties alive and preserve complete scorecards as ordinary results.
   for (const player of active) {
-    if (entries(player.id).length < categoryIds.length && maximumFinalScore(entries(player.id)) < best) {
+    if (filled(player.id) < categoryIds.length && maximumFinalScore(entries(player.id)) < best) {
       player.surrenderReason = "automatic";
     }
   }
-  const unfinished = nextPlayers.filter((player) => !player.surrenderReason && entries(player.id).length < categoryIds.length);
+  const unfinished = nextPlayers.filter((player) => !player.surrenderReason && filled(player.id) < categoryIds.length);
   const ordered = [...unfinished].sort((a, b) => a.seat - b.seat);
   const current = ordered.find((player) => player.seat === currentSeat);
   const next = !advance && current ? current : ordered.find((player) => player.seat > currentSeat) ?? ordered[0];
   return { players: nextPlayers, complete: !next, nextSeat: next?.seat ?? currentSeat,
-    round: next ? Math.min(13, entries(next.id).length + 1) : 13 };
+    round: next ? Math.min(13, filled(next.id) + 1) : 13 };
 }
 
 /** A concession loses to every non-conceding player, regardless of raw points. */

@@ -78,6 +78,46 @@ export function scoreDice(category: CategoryId, dice: number[]) {
   return 0;
 }
 
+/** Scorecard row that accumulates +100 for every YAZY after a scored 50. */
+export const YAZY_BONUS = "yazyBonus";
+export const YAZY_BONUS_VALUE = 100;
+
+/**
+ * Score one turn under the official extra-YAZY rules: once the YAZY box is
+ * filled, another YAZY is a Joker (full house and straights take full value)
+ * and, if that box holds 50, earns a +100 bonus with no upper limit.
+ */
+export function scoreTurn(
+  category: CategoryId,
+  dice: number[],
+  entries: Array<{ category: string; score: number }>,
+) {
+  const yazyBox = entries.find((entry) => entry.category === "yazy");
+  const joker = !!yazyBox && scoreDice("yazy", dice) > 0;
+  const jokerValues: Partial<Record<CategoryId, number>> = {
+    fullHouse: 25, smallStraight: 30, largeStraight: 40,
+  };
+  return {
+    score: (joker ? jokerValues[category] : undefined) ?? scoreDice(category, dice),
+    bonus: joker && yazyBox.score > 0 && category !== "yazy" ? YAZY_BONUS_VALUE : 0,
+  };
+}
+
+/** Appends a turn's score, folding any extra-YAZY bonus into its single row. */
+export function addTurnScore<T extends { category: string; score: number }>(
+  entries: T[], entry: T, bonus: number,
+) {
+  if (!bonus) return [...entries, entry];
+  const current = entries.find((item) => item.category === YAZY_BONUS);
+  const bonusRow = { ...entry, category: YAZY_BONUS, score: (current?.score ?? 0) + bonus };
+  return [...entries.filter((item) => item !== current), entry, bonusRow];
+}
+
+/** Number of scorecard boxes filled, ignoring the extra-YAZY bonus row. */
+export function filledCount(entries: Array<{ category: string }>) {
+  return entries.filter((entry) => entry.category !== YAZY_BONUS).length;
+}
+
 // At equal total gain, prefer combinations over face totals and save Chance.
 const recommendationOrder: readonly CategoryId[] = [
   "yazy", "largeStraight", "smallStraight", "fullHouse", "fourKind", "threeKind",
@@ -107,8 +147,12 @@ export function scoreSummary(entries: Array<{ category: string; score: number }>
     .filter((entry) => categoryIds.slice(0, 6).includes(entry.category as CategoryId))
     .reduce((total, entry) => total + entry.score, 0);
   const bonus = upper >= 63 ? 35 : 0;
-  const lower = entries
-    .filter((entry) => !categoryIds.slice(0, 6).includes(entry.category as CategoryId))
+  const yazyBonus = entries
+    .filter((entry) => entry.category === YAZY_BONUS)
     .reduce((total, entry) => total + entry.score, 0);
-  return { upper, bonus, lower, total: upper + bonus + lower };
+  const lower = entries
+    .filter((entry) => entry.category !== YAZY_BONUS
+      && !categoryIds.slice(0, 6).includes(entry.category as CategoryId))
+    .reduce((total, entry) => total + entry.score, 0);
+  return { upper, bonus, lower, yazyBonus, total: upper + bonus + lower + yazyBonus };
 }
