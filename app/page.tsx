@@ -211,6 +211,53 @@ function saveSession(session: Session) {
   sessionStorage.setItem(`${ACTIVE_SESSION_PREFIX}:${session.code}`, session.playerId);
 }
 
+function forgetSessions(playerIds: string[]) {
+  if (!playerIds.length) return;
+  try {
+    localStorage.setItem(
+      SESSION_KEY,
+      JSON.stringify(readSessions().filter((item) => !playerIds.includes(item.playerId))),
+    );
+  } catch {
+    // Storage unavailable: the stale entries just stay listed.
+  }
+}
+
+type ActiveGame = { session: Session; status: "waiting" | "playing"; players: number };
+type SeatsResponse = {
+  active: { playerId: string; status: ActiveGame["status"]; players: number }[];
+  gone: string[];
+};
+
+/**
+ * Tables this browser still sits at, most recent first. The per-tab marker is
+ * gone once the tab is swiped away, so the landing page has to find the way
+ * back by asking the server which remembered seats are at an unfinished table.
+ */
+async function findActiveGames(signal: AbortSignal): Promise<ActiveGame[]> {
+  const sessions = readSessions();
+  if (!sessions.length) return [];
+  try {
+    const response = await fetch("/api/seats", {
+      method: "POST",
+      signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessions: sessions.map(({ playerId, token }) => ({ playerId, token })) }),
+    });
+    if (!response.ok) return [];
+    const data = (await response.json()) as SeatsResponse;
+    // A seat is only ever deleted along with its room, so these are gone for good.
+    forgetSessions(data.gone);
+    const open = new Map(data.active.map((seat) => [seat.playerId, seat]));
+    return sessions.slice().reverse().flatMap((session) => {
+      const seat = open.get(session.playerId);
+      return seat ? [{ session, status: seat.status, players: seat.players }] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
 export default function Home() {
   const [name, setName] = useState("");
   const [joinCode, setJoinCode] = useState("");
@@ -268,6 +315,8 @@ export default function Home() {
   const [initialized, setInitialized] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [resumable, setResumable] = useState<Session | null>(null);
+  const [activeGames, setActiveGames] = useState<ActiveGame[]>([]);
+  const activeGamesScope = useRef<AbortController | null>(null);
   const stateRef = useRef<RoomState | null>(null);
   const heldRef = useRef(held);
   const roomEtagRef = useRef<string | null>(null);
@@ -796,6 +845,7 @@ export default function Home() {
       });
     } else {
       queueMicrotask(() => setInitialized(true));
+      loadActiveGames();
     }
 
     queueMicrotask(() => {
@@ -1551,7 +1601,19 @@ export default function Home() {
     });
   }
 
+  function loadActiveGames() {
+    activeGamesScope.current?.abort();
+    const controller = new AbortController();
+    activeGamesScope.current = controller;
+    void findActiveGames(controller.signal).then((games) => {
+      if (!controller.signal.aborted) setActiveGames(games);
+    });
+  }
+
   function resumeAs(previous: Session) {
+    activeGamesScope.current?.abort();
+    setActiveGames([]);
+    window.history.replaceState({}, "", `?room=${previous.code}`);
     saveSession(previous);
     roomScope.current.reset();
     setSession(previous);
@@ -1591,6 +1653,7 @@ export default function Home() {
     // The game just played is only in the history once it is finished, so the
     // landing page needs a fresh read rather than the snapshot from mount.
     void refreshHistory();
+    loadActiveGames();
   }
 
   async function copyInvite() {
@@ -2461,6 +2524,17 @@ export default function Home() {
             variant="card"
           />
           <div className="form-body">
+            {activeGames.map((game) => (
+              <div className="resume-note" key={`${game.session.code}:${game.session.playerId}`}>
+                <span>
+                  你還在 {game.session.code} 那桌（{game.status === "playing" ? "對局進行中" : "等人入座"}）
+                  <small>以「{game.session.name}」入座，共 {game.players} 人。</small>
+                </span>
+                <Button variant="soft" onClick={() => resumeAs(game.session)}>
+                  回到這桌
+                </Button>
+              </div>
+            ))}
             {resumable && (
               <div className="resume-note">
                 <span>
