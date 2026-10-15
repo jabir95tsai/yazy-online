@@ -339,7 +339,7 @@ input:focus-visible {
   background: var(--accent);
   border: 0;
   border-radius: var(--r-pill);
-  box-shadow: 0 14px 28px -16px rgba(196, 131, 71, 0.9);
+  box-shadow: 0 8px 18px -12px rgba(196, 131, 71, 0.6);
   color: var(--accent-ink);
   cursor: pointer;
   display: flex;
