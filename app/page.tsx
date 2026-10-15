@@ -923,6 +923,18 @@ export default function Home() {
     (player) => player.seat === state.room.currentSeat,
   );
   const me = state?.players.find((player) => player.id === session?.playerId);
+  // Once a game is under way, a sitting-out seat (declined the rematch or
+  // joined mid-game) is only watching: it has no place on the board, the
+  // podium or the score tabs until the next game.
+  const tablePlayers = useMemo(
+    () => state?.players.filter((player) =>
+      state.room.status === "waiting" || player.rematchReady !== -1) ?? [],
+    [state?.players, state?.room.status],
+  );
+  const spectators = state?.room.status === "waiting"
+    ? []
+    : state?.players.filter((player) => player.rematchReady === -1) ?? [];
+  const isSpectator = state?.room.status !== "waiting" && me?.rematchReady === -1;
   const isMyTurn =
     state?.room.status === "playing" && currentPlayer?.id === session?.playerId;
   const activePlayers = state?.players.filter((player) => !player.surrenderReason) ?? [];
@@ -958,9 +970,11 @@ export default function Home() {
     ? held
     : state?.room.held ?? [false, false, false, false, false];
   const viewedPlayerId =
-    state?.players.some((player) => player.id === scorePlayerId)
+    tablePlayers.some((player) => player.id === scorePlayerId)
       ? scorePlayerId
-      : session?.playerId;
+      : isSpectator
+        ? currentPlayer?.id ?? tablePlayers[0]?.id
+        : session?.playerId;
   const viewedPlayer = state?.players.find(
     (player) => player.id === viewedPlayerId,
   );
@@ -1032,13 +1046,13 @@ export default function Home() {
   const rankings = useMemo(
     () =>
       state
-        ? [...state.players].sort(
+        ? [...tablePlayers].sort(
             (a, b) =>
               resultValue(scoreSummaries.get(b.id)?.total ?? 0, b.surrenderReason) -
               resultValue(scoreSummaries.get(a.id)?.total ?? 0, a.surrenderReason),
           )
         : [],
-    [scoreSummaries, state],
+    [scoreSummaries, state, tablePlayers],
   );
 
   function enterPractice() {
@@ -2102,7 +2116,7 @@ export default function Home() {
           </span>
         </div>
         <div aria-label="看誰的計分卡" className="score-player-tabs" role="tablist">
-          {state.players.map((player) => (
+          {tablePlayers.map((player) => (
             <button
               aria-selected={player.id === viewedPlayerId}
               className={player.id === viewedPlayerId ? "active" : ""}
@@ -2304,6 +2318,8 @@ export default function Home() {
                       onClick={() => action("finish")} variant="ghost">立即結算</Button>}
                     {soleSurvivor.id === session.playerId && <p>想挑戰紀錄？直接繼續擲骰即可。</p>}
                   </>
+                ) : isSpectator ? (
+                  <p>你正在觀戰。這局結束、房主再開一局時，就能加入下一局。</p>
                 ) : me?.surrenderReason ? (
                   <p>{me.surrenderReason === "automatic" ? "剩餘最高分已無法追平領先者，系統已自動投降。" : "你已投降。"}仍可觀看本局。</p>
                 ) : null}
@@ -2398,12 +2414,14 @@ export default function Home() {
                         : state.room.rollsUsed >= 3
                           ? state.room.practice ? "選一格計分，開始下一回合" : "亮起來的格子都可以填，填了就換下一個人"
                           : "點骰子留下想保留的，再擲剩下的"
-                      : `不用急，${currentPlayer?.name ?? "對方"}填完就換你`}
+                      : isSpectator || me?.surrenderReason
+                        ? `正在看${currentPlayer?.name ?? "對方"}出手`
+                        : `不用急，${currentPlayer?.name ?? "對方"}填完就換你`}
                 </p>
               </div>
 
               <div className="players-strip" aria-label="這桌的人">
-                {state.players.map((player) => {
+                {tablePlayers.map((player) => {
                   const summary = scoreSummaries.get(player.id) ?? EMPTY_SCORE_SUMMARY;
                   return (
                     <PlayerChip
@@ -2411,11 +2429,17 @@ export default function Home() {
                       detail={<>{summary.total}{player.surrenderReason ? ` · ${player.surrenderReason === "automatic" ? "自動投降" : "已投降"}` : ""}</>}
                       key={player.id}
                       name={player.name}
-                      suffix={`${player.id === session.playerId ? "（你）" : ""}${player.rematchReady === 0 ? "・等待回覆" : player.rematchReady === -1 ? "・觀戰" : ""}`}
+                      suffix={player.id === session.playerId ? "（你）" : ""}
                     />
                   );
                 })}
               </div>
+              {spectators.length > 0 && (
+                <p className="spectator-note">
+                  觀戰中：{spectators.map((player) =>
+                    `${player.name}${player.id === session.playerId ? "（你）" : ""}`).join("、")}
+                </p>
+              )}
             </section>
 
             {scoreCard}
@@ -2441,7 +2465,9 @@ export default function Home() {
                   <Button disabled={busy} onClick={() => action("restart")}>
                     {busy ? "準備中…" : "再開一局"}
                   </Button>
-                ) : <p role="status">等待房主再開一局，不用離開房間。</p>}
+                ) : <p role="status">{isSpectator
+                  ? "等待房主再開一局，到時就能加入。"
+                  : "等待房主再開一局，不用離開房間。"}</p>}
                 <Button disabled={busy} onClick={leaveRoom} variant="ghost">離開房間</Button>
                 <Button
                   aria-expanded={showFinalCards}

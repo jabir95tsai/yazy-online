@@ -1299,6 +1299,13 @@ footer {
   color: var(--ink-soft);
 }
 
+.spectator-note {
+  color: var(--ink-muted);
+  font-size: 13px;
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+}
+
 .players-strip {
   border-top: 1px solid var(--hairline);
   display: flex;
