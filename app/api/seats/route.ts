@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, ne } from "drizzle-orm";
+import { and, count, eq, gt, inArray, ne } from "drizzle-orm";
 import { ensureSchema, getDb } from "@/db";
 import { players, rooms } from "@/db/schema";
 import { apiError, hashToken } from "@/lib/server";
@@ -6,12 +6,16 @@ import { idsIn } from "@/lib/query";
 
 type Session = { playerId?: string; token?: string };
 
+/** A table nobody has touched for this long is no longer offered as a way back. */
+const RESUMABLE_TABLE_MINUTES = 15;
+
 /**
  * Which of this browser's remembered seats are at a table that is still open.
  *
  * One round trip for the whole list, so the landing page can offer a way back
  * after the tab that held the seat was swiped away. `gone` lists seats whose
- * room has been cleaned up, so the browser can stop remembering them.
+ * room has been cleaned up, so the browser can stop remembering them. Tables
+ * idle for longer than {@link RESUMABLE_TABLE_MINUTES} are simply left out.
  */
 export async function POST(request: Request) {
   try {
@@ -36,6 +40,8 @@ export async function POST(request: Request) {
     const gone = valid.map((session) => session.playerId).filter((id) => !found.has(id));
     if (!seats.length) return Response.json({ active: [], gone });
 
+    const cutoff = new Date(Date.now() - RESUMABLE_TABLE_MINUTES * 60_000).toISOString();
+
     const open = await db
       .select({
         id: rooms.id,
@@ -45,7 +51,7 @@ export async function POST(request: Request) {
       })
       .from(rooms)
       .innerJoin(players, eq(players.roomId, rooms.id))
-      .where(and(idsIn(rooms.id, seats.map((seat) => seat.roomId)), ne(rooms.status, "finished")))
+      .where(and(idsIn(rooms.id, seats.map((seat) => seat.roomId)), ne(rooms.status, "finished"), gt(rooms.updatedAt, cutoff)))
       .groupBy(rooms.id);
     const byId = new Map(open.map((room) => [room.id, room]));
     const active = seats.flatMap((seat) => {

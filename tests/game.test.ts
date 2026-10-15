@@ -278,7 +278,7 @@ test("password hashes written before the cost was recorded still verify", () => 
 
 test("abandoned-room cutoff is an ISO-8601 UTC instant in the past", () => {
   const now = Date.parse("2026-08-02T00:00:00.000Z");
-  assert.equal(abandonedRoomCutoff(now, 7), "2026-07-26T00:00:00.000Z");
+  assert.equal(abandonedRoomCutoff(now, 24), "2026-08-01T00:00:00.000Z");
   // The comparison is a string compare against `rooms.updated_at`, so the
   // format has to match exactly what the app writes.
   assert.match(abandonedRoomCutoff(now), /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);

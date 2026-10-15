@@ -6,11 +6,11 @@ import type { D1Database } from "@cloudflare/workers-types";
  * Only ever applied to rooms that never reached `finished`. Completed games are
  * retained indefinitely because account history is derived from them.
  */
-export const ABANDONED_ROOM_DAYS = 7;
+export const ABANDONED_ROOM_HOURS = 24;
 
 /** Cutoff timestamp for abandoned rooms, as an ISO-8601 UTC string. */
-export function abandonedRoomCutoff(now: number, days = ABANDONED_ROOM_DAYS) {
-  return new Date(now - days * 86_400_000).toISOString();
+export function abandonedRoomCutoff(now: number, hours = ABANDONED_ROOM_HOURS) {
+  return new Date(now - hours * 3_600_000).toISOString();
 }
 
 export async function cleanupExpiredSessions(d1: D1Database) {
