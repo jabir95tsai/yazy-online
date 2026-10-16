@@ -45,7 +45,7 @@ import { resultValue, type SurrenderReason } from "@/lib/match";
 import { Modal } from "./components/modal";
 import { Avatar } from "./components/avatar";
 import { Brand } from "./components/brand";
-import { InstallButton } from "./components/install-button";
+import { InstallButton, RefreshButton, useStandalone } from "./components/install-button";
 import { Button } from "./components/button";
 import { CONFETTI_MS, DiceTray, Die, HeroTray, StillDie, YazyConfetti, type DieSpriteHandle } from "./components/die";
 import { ErrorBanner, FormError, LiveDot, RecordNote } from "./components/feedback";
@@ -293,6 +293,7 @@ export default function Home() {
   /** Narrow screens show the first six rows until this is opened. */
   const [confirmSurrender, setConfirmSurrender] = useState(false);
   const [tableMenuOpen, setTableMenuOpen] = useState(false);
+  const standalone = useStandalone();
   const tableMenuRef = useRef<HTMLDivElement | null>(null);
   const [showFinalCards, setShowFinalCards] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2232,6 +2233,16 @@ export default function Home() {
                     落地音效
                     <span className="menu-switch" aria-hidden="true" />
                   </button>
+                  {standalone && (
+                    <button
+                      className="table-menu-item"
+                      onClick={() => window.location.reload()}
+                      role="menuitem"
+                      type="button"
+                    >
+                      重新整理
+                    </button>
+                  )}
                   {canSurrender && (
                     <>
                       <div className="table-menu-divider" role="separator" />
@@ -2568,6 +2579,7 @@ export default function Home() {
         <Brand />
         <div className="nav-actions">
           <InstallButton />
+          <RefreshButton />
           <button className="account-trigger" onClick={openAccountPanel} type="button">
             <span>{account?.displayName.slice(0, 1).toUpperCase() ?? "人"}</span>
             {account ? account.displayName : "登入"}

@@ -9,28 +9,48 @@ type InstallPrompt = Event & {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
 
+/** True when the app runs from the home screen / dock, where there's no browser reload. */
+export function useStandalone() {
+  const [standalone, setStandalone] = useState(false);
+  useEffect(() => {
+    const mode = window.matchMedia("(display-mode: standalone)");
+    const sync = () => setStandalone(mode.matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
+    sync();
+    mode.addEventListener("change", sync);
+    return () => mode.removeEventListener("change", sync);
+  }, []);
+  return standalone;
+}
+
+export function RefreshButton() {
+  if (!useStandalone()) return null;
+  return (
+    <button type="button" className="settings-trigger" aria-label="重新整理" title="重新整理" onClick={() => window.location.reload()}>
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" />
+      </svg>
+    </button>
+  );
+}
+
 export function InstallButton() {
   const prompt = useRef<InstallPrompt | null>(null);
+  const standalone = useStandalone();
   const [installed, setInstalled] = useState(false);
   const [help, setHelp] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const mode = window.matchMedia("(display-mode: standalone)");
-    const sync = () => setInstalled(mode.matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
     const capture = (event: Event) => {
       event.preventDefault();
       prompt.current = event as InstallPrompt;
     };
     const done = () => { prompt.current = null; setInstalled(true); setHelp(false); };
-    sync();
     window.addEventListener("beforeinstallprompt", capture);
     window.addEventListener("appinstalled", done);
-    mode.addEventListener("change", sync);
     return () => {
       window.removeEventListener("beforeinstallprompt", capture);
       window.removeEventListener("appinstalled", done);
-      mode.removeEventListener("change", sync);
     };
   }, []);
 
@@ -49,7 +69,7 @@ export function InstallButton() {
     }
   }
 
-  if (installed) return null;
+  if (installed || standalone) return null;
   return <>
     <button type="button" className="settings-trigger" aria-label="新增到桌面" title="新增到桌面" disabled={busy} onClick={install}>
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
