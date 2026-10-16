@@ -5,7 +5,7 @@
 export { Avatar } from "./avatar";
 export { Brand, BrandMark } from "./brand";
 export { Button } from "./button";
-export { DiceShadowDefs, DiceTray, Die, DieSprite, HeroTray, StillDie, type DieSpriteHandle } from "./die";
+export { CONFETTI_MS, DiceShadowDefs, DiceTray, Die, DieSprite, HeroTray, StillDie, YazyConfetti, type DieSpriteHandle } from "./die";
 export { ErrorBanner, FormError, LiveDot, RecordNote } from "./feedback";
 export { FriendAction, FriendActions, FriendRow, HeadToHead } from "./friend-row";
 export { Modal } from "./modal";

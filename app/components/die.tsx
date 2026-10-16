@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import {
   PIP_RADIUS,
   renderResting,
@@ -215,22 +215,24 @@ export function HeroTray({ children }: { children: ReactNode }) {
 /**
  * The dark felt the dice land on. Brings its own `DiceShadowDefs`, so the
  * `Die`s inside get their shadows. `idle` dims it while it's someone else's
- * turn.
+ * turn; `yazy` makes it glow and sets the five dice hopping in a wave.
  *
  * @category Dice
  */
 export function DiceTray({
   idle = false,
   rolling = false,
+  yazy = false,
   children,
 }: {
   idle?: boolean;
   rolling?: boolean;
+  yazy?: boolean;
   children: ReactNode;
 }) {
   return (
     <div
-      className={`dice-tray ${idle ? "idle" : ""}`}
+      className={`dice-tray ${idle ? "idle" : ""} ${yazy ? "yazy" : ""}`}
       aria-busy={rolling}
       aria-label="骰子區"
       aria-live="polite"
@@ -291,5 +293,67 @@ export function Die({
       )}
       {held && <small>留</small>}
     </button>
+  );
+}
+
+const CONFETTI_COLORS = [
+  "var(--accent)",
+  "var(--accent-deep)",
+  "var(--chip)",
+  "var(--tray)",
+  "#96a5c0",
+  "#14315c",
+  "var(--accent)",
+];
+
+/**
+ * The confetti for a YAZY, scattered once with a fixed seed so every player
+ * at the table sees the same shower and the server render matches the client.
+ */
+const CONFETTI = (() => {
+  let seed = 11;
+  const random = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+  return Array.from({ length: 34 }, (_, index) => {
+    const round = random() < 0.3;
+    const width = round ? 9 : 6 + Math.round(random() * 6);
+    const height = round ? 9 : 12 + Math.round(random() * 10);
+    const left = Math.round(random() * 96 + 2);
+    const delay = 300 + Math.round(random() * 900);
+    const duration = 2400 + Math.round(random() * 1600);
+    const rotate = Math.round(random() * 720 - 360);
+    const sway = Math.round(random() * 40 - 20);
+    return {
+      animationDelay: `${delay}ms, ${delay}ms`,
+      animationDuration: `${duration}ms, ${900 + (index % 5) * 150}ms`,
+      background: CONFETTI_COLORS[index % CONFETTI_COLORS.length],
+      borderRadius: round ? "50%" : "2px",
+      height,
+      left: `${left}%`,
+      width,
+      "--confetti-rotate": `${rotate}deg`,
+      "--confetti-sway": `${sway}px`,
+    } as CSSProperties;
+  });
+})();
+
+/** How long the last piece takes to fall: the longest delay plus duration. */
+export const CONFETTI_MS = 1200 + 4000;
+
+/**
+ * A shower of confetti over the whole screen, played once from when it mounts.
+ * Remount it (a new `key`) to play it again; it ignores the pointer.
+ *
+ * @category Dice
+ */
+export function YazyConfetti() {
+  return (
+    <div aria-hidden="true" className="yazy-confetti">
+      {CONFETTI.map((style, index) => (
+        <span key={index} style={style} />
+      ))}
+    </div>
   );
 }

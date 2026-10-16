@@ -47,7 +47,7 @@ import { Avatar } from "./components/avatar";
 import { Brand } from "./components/brand";
 import { InstallButton } from "./components/install-button";
 import { Button } from "./components/button";
-import { DiceTray, Die, HeroTray, StillDie, type DieSpriteHandle } from "./components/die";
+import { CONFETTI_MS, DiceTray, Die, HeroTray, StillDie, YazyConfetti, type DieSpriteHandle } from "./components/die";
 import { ErrorBanner, FormError, LiveDot, RecordNote } from "./components/feedback";
 import { FriendAction, FriendActions, FriendRow, HeadToHead } from "./components/friend-row";
 import { LobbySeats, PlayerChip, Podium, Seat } from "./components/players";
@@ -150,6 +150,7 @@ type DieAnimation =
 
 const SESSION_KEY = "yazy-club-sessions";
 const ACTIVE_SESSION_PREFIX = "yazy-club-active-player";
+const NO_PRACTICE_FACES: (number | null)[] = [null, null, null, null, null];
 const EMPTY_SCORE_SUMMARY = { upper: 0, bonus: 0, lower: 0, yazyBonus: 0, total: 0 };
 const NO_DICE_IN_FLIGHT = [false, false, false, false, false];
 const NO_FRIENDS: FriendsPayload = {
@@ -278,6 +279,15 @@ export default function Home() {
    * flash the new numbers while the dice on the table were still tumbling.
    */
   const [settledDice, setSettledDice] = useState<number[]>([]);
+  /**
+   * 測試模式：下一擲每顆骰子要落在幾點，null 是照常隨機。留著的骰子不受影響。
+   * 擲完不會清掉，方便同一個結果連擲好幾次。
+   */
+  const [practiceFaces, setPracticeFaces] = useState<(number | null)[]>(NO_PRACTICE_FACES);
+  const practiceFacesRef = useRef(practiceFaces);
+  practiceFacesRef.current = practiceFaces;
+  /** Which roll the confetti is falling for, until the last piece lands. */
+  const [confettiRoll, setConfettiRoll] = useState<string | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [scorePlayerId, setScorePlayerId] = useState<string | null>(null);
   /** Narrow screens show the first six rows until this is opened. */
@@ -966,6 +976,27 @@ export default function Home() {
       setSettledDice(state.room.dice);
     }
   }, [rolling, state?.room.dice]);
+  // Five of a kind on the table once the dice have stopped: the tray keeps
+  // glowing for as long as they sit there, the confetti falls once per roll.
+  const yazyOnTable =
+    !rolling &&
+    state?.room.status === "playing" &&
+    state.room.rollsUsed > 0 &&
+    state.room.dice.length === 5 &&
+    state.room.dice.every((value) => value === state.room.dice[0]);
+  const yazyRoll = yazyOnTable
+    ? `${state.room.id}:${state.room.round}:${state.room.currentSeat}:${state.room.rollsUsed}`
+    : null;
+  useEffect(() => {
+    if (!yazyRoll) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setConfettiRoll(yazyRoll);
+  }, [yazyRoll]);
+  useEffect(() => {
+    if (!confettiRoll) return;
+    const timer = window.setTimeout(() => setConfettiRoll(null), CONFETTI_MS);
+    return () => window.clearTimeout(timer);
+  }, [confettiRoll]);
   const visibleHeld = isMyTurn
     ? held
     : state?.room.held ?? [false, false, false, false, false];
@@ -1093,6 +1124,8 @@ export default function Home() {
       const byte = new Uint8Array(1);
       const dice = Array.from({ length: 5 }, (_, index) => {
         if (heldRef.current[index]) return current.room.dice[index];
+        const chosen = practiceFacesRef.current[index];
+        if (chosen) return chosen;
         let face: number | null = null;
         while (face === null) { crypto.getRandomValues(byte); face = fairDieFromByte(byte[0]); }
         return face;
@@ -2358,7 +2391,7 @@ export default function Home() {
                 />
               )}
 
-              <DiceTray idle={!isMyTurn} rolling={rolling}>
+              <DiceTray idle={!isMyTurn} rolling={rolling} yazy={yazyOnTable}>
                 {Array.from({ length: 5 }).map((_, index) => {
                   const inFlight = diceInFlight[index];
                   return (
@@ -2377,6 +2410,7 @@ export default function Home() {
                   );
                 })}
               </DiceTray>
+              {confettiRoll && <YazyConfetti key={confettiRoll} />}
 
               {/* 擲得動的時候是一顆按鈕，擲不動的時候就換成一句話 —— 桌上不留
                   按不下去的鍵。 */}
@@ -2419,6 +2453,38 @@ export default function Home() {
                         : `不用急，${currentPlayer?.name ?? "對方"}填完就換你`}
                 </p>
               </div>
+
+              {state.room.practice && state.room.status === "playing" && (
+                <div className="practice-faces" role="group" aria-label="測試模式：指定下一擲的點數">
+                  <div className="practice-faces-head">
+                    <strong>下一擲</strong>
+                    <small>點一下切換點數，留著的骰子不變</small>
+                    {practiceFaces.some(Boolean) && (
+                      <button type="button" className="practice-faces-clear" onClick={() => setPracticeFaces(NO_PRACTICE_FACES)}>
+                        全部隨機
+                      </button>
+                    )}
+                  </div>
+                  <div className="practice-faces-row">
+                    {practiceFaces.map((face, index) => (
+                      <button
+                        aria-label={`第 ${index + 1} 顆：${visibleHeld[index] ? "已保留" : face ? `${face} 點` : "隨機"}`}
+                        className={`practice-face ${face ? "set" : ""}`}
+                        disabled={visibleHeld[index]}
+                        key={index}
+                        onClick={() =>
+                          setPracticeFaces((faces) =>
+                            faces.map((value, slot) => (slot === index ? ((value ?? 0) + 1) % 7 || null : value)),
+                          )
+                        }
+                        type="button"
+                      >
+                        {visibleHeld[index] ? "留" : face ?? "?"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="players-strip" aria-label="這桌的人">
                 {tablePlayers.map((player) => {

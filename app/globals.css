@@ -1247,6 +1247,115 @@ footer {
   opacity: 0.75;
 }
 
+/* YAZY：托盤發光，五顆骰子一顆接一顆跳起來，像一道波浪往右傳。跳的是
+   sprite 而不是按鈕，所以「留」的位移和標籤都不受影響；只在骰子停下來之後
+   才會加上 .yazy，不會和擲骰的逐格動畫搶同一個 transform。
+
+   這裡每個動畫都只動 opacity 和 transform/translate，全部交給合成器。直接
+   動 box-shadow 的話，托盤每一幀都要重畫，連帶把畫在上面的五顆骰子也重新
+   點陣化一次，跳起來就會卡。所以光暈拆成兩層固定的陰影，靠交叉淡入淡出
+   做出呼吸感。 */
+@keyframes yazy-glow-rest {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes yazy-glow-peak {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+
+/* 上升減速、下落加速，落地後停一段再換下一輪。 */
+@keyframes yazy-hop {
+  0% { transform: translateY(0); animation-timing-function: cubic-bezier(0.25, 0.6, 0.35, 1); }
+  16% { transform: translateY(-20px); animation-timing-function: cubic-bezier(0.55, 0, 0.75, 0.4); }
+  32%, 100% { transform: translateY(0); }
+}
+
+.dice-tray.yazy {
+  --die-stroke: var(--accent);
+  isolation: isolate;
+}
+
+.dice-tray.yazy::before,
+.dice-tray.yazy::after {
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  will-change: opacity;
+  z-index: -1;
+}
+
+.dice-tray.yazy::before {
+  animation: yazy-glow-rest 1800ms ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(232, 160, 106, 0.5), 0 0 28px 4px rgba(232, 160, 106, 0.28);
+}
+
+.dice-tray.yazy::after {
+  animation: yazy-glow-peak 1800ms ease-in-out infinite;
+  box-shadow: 0 0 0 10px rgba(232, 160, 106, 0.12), 0 0 56px 14px rgba(232, 160, 106, 0.42);
+}
+
+/* 骰子停下來之後才有 will-change，擲骰時的逐格動畫不受影響（見 .die-shell）。 */
+.dice-tray.yazy .die-sprite {
+  animation: yazy-hop 1400ms infinite;
+  will-change: transform;
+}
+
+.dice-tray.yazy .die:nth-of-type(2) .die-sprite { animation-delay: 120ms; }
+.dice-tray.yazy .die:nth-of-type(3) .die-sprite { animation-delay: 240ms; }
+.dice-tray.yazy .die:nth-of-type(4) .die-sprite { animation-delay: 360ms; }
+.dice-tray.yazy .die:nth-of-type(5) .die-sprite { animation-delay: 480ms; }
+
+/* 落下用 transform，左右飄用獨立的 translate，兩個都不會觸發重新排版。 */
+@keyframes yazy-confetti-fall {
+  0% { opacity: 0; transform: translateY(-40px) rotate(0); }
+  8%, 85% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(calc(100vh + 40px)) rotate(var(--confetti-rotate)); }
+}
+
+@keyframes yazy-confetti-sway {
+  0%, 100% { translate: 0 0; }
+  50% { translate: var(--confetti-sway) 0; }
+}
+
+.yazy-confetti {
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  z-index: 50;
+}
+
+.yazy-confetti span {
+  animation-fill-mode: both;
+  animation-iteration-count: 1, infinite;
+  animation-name: yazy-confetti-fall, yazy-confetti-sway;
+  animation-timing-function: linear, ease-in-out;
+  display: block;
+  position: absolute;
+  top: -20px;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dice-tray.yazy::before,
+  .dice-tray.yazy::after,
+  .dice-tray.yazy .die-sprite {
+    animation: none;
+  }
+
+  .dice-tray.yazy::after {
+    opacity: 0;
+  }
+
+  .yazy-confetti {
+    display: none;
+  }
+}
+
 .roll-actions {
   align-items: center;
   display: flex;
@@ -1284,6 +1393,75 @@ footer {
   font-size: 14px;
   margin: 0;
   text-align: center;
+}
+
+/* 測試模式：指定下一擲的點數。刻意做得安靜，只是開發測試用的工具列。 */
+.practice-faces {
+  border: 1px dashed rgba(43, 40, 37, 0.18);
+  border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.practice-faces-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.practice-faces-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.practice-faces-head small {
+  color: var(--ink-muted);
+  flex: 1 1 auto;
+  font-size: 12px;
+}
+
+.practice-faces-clear {
+  background: transparent;
+  border: 0;
+  color: var(--accent-deep);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 32px;
+  padding: 0 4px;
+}
+
+.practice-faces-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.practice-face {
+  background: var(--sunk-strong);
+  border: 0;
+  border-radius: 12px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  min-height: 44px;
+  touch-action: manipulation;
+}
+
+.practice-face.set {
+  background: var(--accent-wash-strong);
+  color: var(--accent-deep);
+}
+
+.practice-face:disabled {
+  cursor: default;
+  font-size: 13px;
+  opacity: 0.55;
 }
 
 .feedback-toggle {
