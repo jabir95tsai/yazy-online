@@ -1001,6 +1001,11 @@ export default function Home() {
   const visibleHeld = isMyTurn
     ? held
     : state?.room.held ?? [false, false, false, false, false];
+  // Only matters while a re-roll is still possible; after the third roll the
+  // table already reads "三次都擲完了" whatever is held.
+  const rollsUsed = state?.room.rollsUsed ?? 0;
+  const allHeld =
+    rollsUsed > 0 && rollsUsed < 3 && visibleHeld.length === 5 && visibleHeld.every(Boolean);
   const viewedPlayerId =
     tablePlayers.some((player) => player.id === scorePlayerId)
       ? scorePlayerId
@@ -1121,7 +1126,7 @@ export default function Home() {
     if (actionName === "restart") { enterPractice(); return; }
     if (current.room.status !== "playing") return;
     let next = current;
-    if (actionName === "roll" && current.room.rollsUsed < 3) {
+    if (actionName === "roll" && current.room.rollsUsed < 3 && (current.room.rollsUsed === 0 || !heldRef.current.every(Boolean))) {
       const byte = new Uint8Array(1);
       const dice = Array.from({ length: 5 }, (_, index) => {
         if (heldRef.current[index]) return current.room.dice[index];
@@ -1406,6 +1411,9 @@ export default function Home() {
     setError("");
     try {
       if (actionName === "roll") {
+        if (stateRef.current.room.rollsUsed > 0 && heldRef.current.every(Boolean)) {
+          return;
+        }
         startRollAnimation(heldRef.current, true);
         // The server decides which dice survive from `rooms.held_json`, so a
         // hold still inside its debounce window has to be stored before the
@@ -2426,7 +2434,7 @@ export default function Home() {
               {/* 擲得動的時候是一顆按鈕，擲不動的時候就換成一句話 —— 桌上不留
                   按不下去的鍵。 */}
               <div className="roll-actions">
-                {isMyTurn && state.room.rollsUsed < 3 ? (
+                {isMyTurn && state.room.rollsUsed < 3 && !allHeld ? (
                   <Button
                     disabled={busy || rolling}
                     onClick={() => action("roll")}
@@ -2441,7 +2449,7 @@ export default function Home() {
                 ) : (
                   <div className="roll-status" aria-live="polite">
                     {isMyTurn ? (
-                      "三次都擲完了"
+                      allHeld ? "五顆都留著了" : "三次都擲完了"
                     ) : (
                       <>
                         <Avatar aria-hidden="true" name={currentPlayer?.name ?? "人"} />
@@ -2458,7 +2466,9 @@ export default function Home() {
                         ? "按下擲骰，慢慢來"
                         : state.room.rollsUsed >= 3
                           ? state.room.practice ? "選一格計分，開始下一回合" : "亮起來的格子都可以填，填了就換下一個人"
-                          : "點骰子留下想保留的，再擲剩下的"
+                          : allHeld
+                            ? "選一格計分，或點一下要重擲的骰子"
+                            : "點骰子留下想保留的，再擲剩下的"
                       : isSpectator || me?.surrenderReason
                         ? `正在看${currentPlayer?.name ?? "對方"}出手`
                         : `不用急，${currentPlayer?.name ?? "對方"}填完就換你`}

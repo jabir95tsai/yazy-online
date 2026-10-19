@@ -54,7 +54,7 @@ test("history dates support extended room timestamps and invalid legacy values",
   assert.equal(formatHistoryDate("not-a-date"), "日期不明");
   assert.equal(formatHistoryDate(""), "日期不明");
 });
-import { maximumFinalScore, resolveMatch, type MatchPlayer } from "../lib/match.ts";
+import { maximumFinalScore, minimumFinalScore, resolveMatch, type MatchPlayer } from "../lib/match.ts";
 import { addTurnScore, categoryIds, fairDieFromByte, filledCount, recommendScore, scoreDice, scoreSummary, scoreTurn } from "../lib/game.ts";
 import {
   LEGACY_PBKDF2_ITERATIONS,
@@ -367,14 +367,60 @@ test("maximum score includes reachable bonus and treats zero as a filled categor
 const matchPlayers: MatchPlayer[] = [0, 1, 2].map((seat) => ({ id: `p${seat}`, seat, surrenderReason: null }));
 const nearEnd = (id: string) => categoryIds.filter((id) => id !== "chance").map((category) => ({ playerId: id, category, score: 0 }));
 
+test("minimum score counts only what is on the scorecard, since a timeout can zero any open box", () => {
+  assert.equal(minimumFinalScore([]), 0);
+  assert.equal(minimumFinalScore([{ category: "chance", score: 12 }]), 12);
+  assert.equal(
+    minimumFinalScore([
+      { category: "ones", score: 3 },
+      { category: "twos", score: 6 },
+      { category: "threes", score: 9 },
+      { category: "fours", score: 12 },
+      { category: "fives", score: 15 },
+      { category: "sixes", score: 18 },
+    ]),
+    63 + 35,
+  );
+});
+
 test("automatic surrender keeps a possible tie alive and skips eliminated seats", () => {
-  const scores = [...nearEnd("p1"), { playerId: "p0", category: "smallStraight", score: 30 }];
+  // p0 still has Chance open, but a timeout could fill it with 0, so no +5 floor.
+  // p1 only has Chance left (maximumFinalScore = 30), so a tie at 30 is still reachable.
+  const scores = [...nearEnd("p1"), { playerId: "p0", category: "fullHouse", score: 25 }];
+  scores.push({ playerId: "p0", category: "ones", score: 5 });
   assert.equal(resolveMatch(matchPlayers, scores, 0, true).players[1].surrenderReason, null);
-  scores.push({ playerId: "p0", category: "ones", score: 1 });
+  // Once p0 banks 31, p1 can no longer catch up.
+  scores.push({ playerId: "p0", category: "twos", score: 1 });
   const next = resolveMatch(matchPlayers, scores, 0, true);
   assert.equal(next.players[1].surrenderReason, "automatic");
   assert.equal(next.nextSeat, 2);
   assert.equal(next.complete, false);
+});
+
+test("a timed-out skip that zeroes Chance cannot be pre-empted by a Chance floor", () => {
+  // p0 has 26 banked and only Chance open; p1 can reach 30. Before the fix p0's
+  // floor was 31 and p1 was eliminated, even though skipping p0 ends them at 26.
+  const p0 = categoryIds.filter((id) => id !== "chance").map((category) => ({ playerId: "p0", category, score: 0 }));
+  p0.find((entry) => entry.category === "fullHouse")!.score = 25;
+  p0.find((entry) => entry.category === "ones")!.score = 1;
+  const scores = [...p0, ...nearEnd("p1")];
+  assert.equal(resolveMatch(matchPlayers.slice(0, 2), scores, 0, false).players[1].surrenderReason, null);
+});
+
+test("3rd roll locked dice constrains current player's ceiling and triggers immediate auto-surrender", () => {
+  // p0 has banked 20 in chance (minimumFinalScore = 20).
+  // p1 has only Chance left (theoretical max 30 >= 20 before rolling, so still alive).
+  const scores = [...nearEnd("p1"), { playerId: "p0", category: "chance", score: 20 }];
+  assert.equal(resolveMatch(matchPlayers.slice(0, 2), scores, 1, false, undefined, { rollsUsed: 2, dice: [1, 1, 1, 1, 2] }).players[1].surrenderReason, null);
+  // On the 3rd roll, p1 lands [1, 1, 1, 1, 2] (sum 6 < 20): locked-dice ceiling is 6, so p1 is immediately eliminated and turn advances to p0.
+  const afterThirdRoll = resolveMatch(matchPlayers.slice(0, 2), scores, 1, false, undefined, { rollsUsed: 3, dice: [1, 1, 1, 1, 2] });
+  assert.equal(afterThirdRoll.players[1].surrenderReason, "automatic");
+  assert.equal(afterThirdRoll.nextSeat, 0);
+  assert.equal(afterThirdRoll.complete, false);
+  // If p1 lands [4, 4, 4, 4, 4] (sum 20 == 20), tie remains alive!
+  const tieAlive = resolveMatch(matchPlayers.slice(0, 2), scores, 1, false, undefined, { rollsUsed: 3, dice: [4, 4, 4, 4, 4] });
+  assert.equal(tieAlive.players[1].surrenderReason, null);
+  assert.equal(tieAlive.nextSeat, 1);
 });
 
 test("manual surrender preserves another player's turn and the winner can finish a scorecard", () => {
