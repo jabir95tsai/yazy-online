@@ -407,20 +407,16 @@ test("a timed-out skip that zeroes Chance cannot be pre-empted by a Chance floor
   assert.equal(resolveMatch(matchPlayers.slice(0, 2), scores, 0, false).players[1].surrenderReason, null);
 });
 
-test("3rd roll locked dice constrains current player's ceiling and triggers immediate auto-surrender", () => {
-  // p0 has banked 20 in chance (minimumFinalScore = 20).
-  // p1 has only Chance left (theoretical max 30 >= 20 before rolling, so still alive).
-  const scores = [...nearEnd("p1"), { playerId: "p0", category: "chance", score: 20 }];
-  assert.equal(resolveMatch(matchPlayers.slice(0, 2), scores, 1, false, undefined, { rollsUsed: 2, dice: [1, 1, 1, 1, 2] }).players[1].surrenderReason, null);
-  // On the 3rd roll, p1 lands [1, 1, 1, 1, 2] (sum 6 < 20): locked-dice ceiling is 6, so p1 is immediately eliminated and turn advances to p0.
-  const afterThirdRoll = resolveMatch(matchPlayers.slice(0, 2), scores, 1, false, undefined, { rollsUsed: 3, dice: [1, 1, 1, 1, 2] });
-  assert.equal(afterThirdRoll.players[1].surrenderReason, "automatic");
-  assert.equal(afterThirdRoll.nextSeat, 0);
-  assert.equal(afterThirdRoll.complete, false);
-  // If p1 lands [4, 4, 4, 4, 4] (sum 20 == 20), tie remains alive!
-  const tieAlive = resolveMatch(matchPlayers.slice(0, 2), scores, 1, false, undefined, { rollsUsed: 3, dice: [4, 4, 4, 4, 4] });
-  assert.equal(tieAlive.players[1].surrenderReason, null);
-  assert.equal(tieAlive.nextSeat, 1);
+test("auto-surrender waits for the player's score: the dice on the table do not eliminate anyone", () => {
+  // p1 has Chance and Ones open, p0 banked 20. Rolling (advance=false) keeps p1 alive;
+  // p1 is only eliminated once the score they pick leaves them unable to catch up.
+  const p1 = nearEnd("p1").filter((entry) => entry.category !== "ones");
+  const scores = [...p1, { playerId: "p0", category: "chance", score: 20 }];
+  assert.equal(resolveMatch(matchPlayers.slice(0, 2), scores, 1, false).players[1].surrenderReason, null);
+  const scored = [...scores, { playerId: "p1", category: "chance", score: 6 }];
+  const next = resolveMatch(matchPlayers.slice(0, 2), scored, 1, true);
+  assert.equal(next.players[1].surrenderReason, "automatic");
+  assert.equal(next.nextSeat, 0);
 });
 
 test("manual surrender preserves another player's turn and the winner can finish a scorecard", () => {

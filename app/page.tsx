@@ -1137,8 +1137,11 @@ export default function Home() {
         return face;
       });
       startRollAnimation(heldRef.current, true);
-      next = { ...current, room: { ...current.room, dice, held: [...heldRef.current], rollsUsed: current.room.rollsUsed + 1 } };
-      revealRollResult(next.room.held, dice);
+      const thrown = [...heldRef.current];
+      const yazy = dice.every((value) => value === dice[0]);
+      next = { ...current, room: { ...current.room, dice, held: yazy ? [true, true, true, true, true] : thrown, rollsUsed: current.room.rollsUsed + 1 } };
+      revealRollResult(thrown, dice);
+      if (yazy) { heldRef.current = next.room.held; setHeld(next.room.held); }
     } else if (actionName === "score" && category && current.room.rollsUsed > 0 &&
       !current.scores.some(score => score.category === category)) {
       const turn = scoreTurn(category, current.room.dice, current.scores);
@@ -2638,7 +2641,7 @@ export default function Home() {
             variant="card"
           />
           <div className="form-body">
-            {activeGames.map((game) => (
+            {activeGames.slice(0, 1).map((game) => (
               <div className="resume-note" key={`${game.session.code}:${game.session.playerId}`}>
                 <span>
                   你還在 {game.session.code} 那桌（{game.status === "playing" ? "對局進行中" : "等人入座"}）

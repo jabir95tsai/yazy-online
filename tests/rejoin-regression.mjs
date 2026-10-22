@@ -11,6 +11,9 @@ const browser = process.env.TEST_BROWSER === "webkit"
   : await engines.chromium.launch({ headless: true, channel: "chrome" });
 const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
 try {
+  const olderResponse = await context.request.post(`${origin}/api/rooms`, { data: { name: "較早的房主" } });
+  assert.ok(olderResponse.ok());
+  const older = { ...await olderResponse.json(), name: "較早的房主" };
   const created = await context.request.post(`${origin}/api/rooms`, { data: { name: "斷線房主" } });
   assert.ok(created.ok());
   const host = { ...await created.json(), name: "斷線房主" };
@@ -21,13 +24,14 @@ try {
     if (!localStorage.getItem("yazy-club-sessions")) {
       localStorage.setItem("yazy-club-sessions", JSON.stringify(sessions));
     }
-  }, [stale, host]);
+  }, [stale, older, host]);
   await page.goto(origin);
   await page.getByRole("button", { name: "回到這桌" }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "回到這桌" }).count(), 1, "unknown room must not be offered");
+  assert.equal(await page.getByRole("button", { name: "回到這桌" }).count(), 1, "only the most recent active room is offered");
+  assert.equal(await page.locator(".resume-note").filter({ hasText: older.code }).count(), 0);
   await page.getByText("共 1 人").waitFor();
   const kept = await page.evaluate(() => JSON.parse(localStorage.getItem("yazy-club-sessions")));
-  assert.deepEqual(kept.map((item) => item.code), [host.code], "dead room is forgotten");
+  assert.deepEqual(kept.map((item) => item.code), [older.code, host.code], "dead room is forgotten while valid identities remain available");
 
   await page.getByRole("button", { name: "回到這桌" }).click();
   await page.waitForURL(`**/?room=${host.code}`);

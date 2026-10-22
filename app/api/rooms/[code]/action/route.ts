@@ -58,14 +58,9 @@ function rollDie() {
 // One CAS-controlled transaction owns the room, scores and concession states.
 // The unique timestamp suffix prevents a losing concurrent request from writing.
 async function commitMatch(room: RoomRow, roomPlayers: MatchPlayer[], roomScores: MatchScore[],
-  options: { score?: MatchScore; bonus?: number; surrender?: string; finish?: boolean; advance?: boolean; dice?: number[]; rollsUsed?: number }) {
+  options: { score?: MatchScore; bonus?: number; surrender?: string; finish?: boolean; advance?: boolean }) {
   const afterScores = options.score ? addTurnScore(roomScores, options.score, options.bonus ?? 0) : roomScores;
-  const rollsUsed = options.rollsUsed ?? room.rollsUsed;
-  const dice = options.dice ?? (JSON.parse(room.diceJson) as number[]);
-  const next = resolveMatch(roomPlayers, afterScores, room.currentSeat, !!options.advance, options.surrender, {
-    rollsUsed,
-    dice,
-  });
+  const next = resolveMatch(roomPlayers, afterScores, room.currentSeat, !!options.advance, options.surrender);
   const complete = !!options.finish || next.complete;
   const resetTurn = !!options.advance || next.nextSeat !== room.currentSeat || complete;
   const suffix = Array.from(crypto.getRandomValues(new Uint32Array(4)), (value) => value.toString().padStart(10, "0")).join("");
@@ -76,8 +71,8 @@ async function commitMatch(room: RoomRow, roomPlayers: MatchPlayer[], roomScores
       held_json = ?, rolls_used = ?, updated_at = ?, finished_at = ?, turn_deadline = ?
     WHERE id = ? AND status = 'playing' AND updated_at = ?
   `).bind(complete ? "finished" : "playing", next.nextSeat, next.round,
-    resetTurn ? "[]" : JSON.stringify(dice), resetTurn ? JSON.stringify(emptyHeld) : room.heldJson,
-    resetTurn ? 0 : rollsUsed, updatedAt, complete ? updatedAt : null,
+    resetTurn ? "[]" : room.diceJson, resetTurn ? JSON.stringify(emptyHeld) : room.heldJson,
+    resetTurn ? 0 : room.rollsUsed, updatedAt, complete ? updatedAt : null,
     complete ? null : resetTurn ? turnDeadline() : room.turnDeadline, room.id, room.updatedAt)];
   if (options.score) {
     const score = options.score;
@@ -235,10 +230,7 @@ export async function POST(
       return Response.json({ error: "遊戲目前不在進行中。" }, { status: 409 });
     }
 
-    const needsScores =
-      ["score", "skip", "surrender", "finish"].includes(body.action ?? "") ||
-      (body.action === "roll" && room.rollsUsed === 2);
-    const roomScores = needsScores
+    const roomScores = ["score", "skip", "surrender", "finish"].includes(body.action ?? "")
       ? await db.select({ playerId: scores.playerId, category: scores.category, score: scores.score })
         .from(scores).where(eq(scores.roomId, room.id))
       : [];
@@ -330,22 +322,15 @@ export async function POST(
       const nextDice = Array.from({ length: 5 }, (_, index) =>
         held[index] && previous[index] ? previous[index] : rollDie(),
       );
-      const nextRollsUsed = room.rollsUsed + 1;
-      if (nextRollsUsed >= 3) {
-        const next = await commitMatch(room, roomPlayers, roomScores, {
-          dice: nextDice,
-          rollsUsed: nextRollsUsed,
-        });
-        if (!next) {
-          return Response.json({ error: "回合狀態已變更，請重新整理。" }, { status: 409 });
-        }
-        return Response.json({ ok: true, dice: nextDice, complete: next.complete });
-      }
       const result = await db
         .update(rooms)
         .set({
           diceJson: JSON.stringify(nextDice),
-          rollsUsed: nextRollsUsed,
+          // A YAZY locks every die so it can't be rerolled by accident.
+          heldJson: JSON.stringify(
+            nextDice.every((value) => value === nextDice[0]) ? [true, true, true, true, true] : held,
+          ),
+          rollsUsed: room.rollsUsed + 1,
           updatedAt: nextTimestamp(room.updatedAt),
         })
         .where(
