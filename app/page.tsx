@@ -52,6 +52,7 @@ import { ErrorBanner, FormError, LiveDot, RecordNote } from "./components/feedba
 import { FriendAction, FriendActions, FriendRow, HeadToHead } from "./components/friend-row";
 import { LobbySeats, PlayerChip, Podium, Seat } from "./components/players";
 import { RoomCode } from "./components/room-code";
+import { ResultIcon } from "./components/result-icon";
 import { BonusRow, ScoreRow, YazyBonusRow } from "./components/score-row";
 import { StatGrid } from "./components/stat-grid";
 import { SegmentedTabs } from "./components/tabs";
@@ -2779,19 +2780,26 @@ export default function Home() {
         ) : (
           <div className="history-list">
             {history.slice(0, 4).map((game) => {
-              const result = readGame(game);
+              const read = readGame(game);
+              // 沒有自己的座位（旁觀別人的桌）就以勝者為主角。
+              const subject = read.mine ?? read.winner;
+              const result = read.result ?? read.winnerResult;
+              if (!subject || !result) return null;
+              const others = read.lines.filter((line) => line !== subject);
+              const concession = subject.surrenderReason
+                ?? (result.wonBySurrender ? others.find((line) => line.surrenderReason)?.surrenderReason : null);
+              const rivals = others.map((line) => line.name).join("、");
               return (
                 <article key={`${game.code}-${game.finishedAt}`}>
-                  <strong>
-                    {result.mine
-                      ? `${result.result?.label} · 第 ${result.place} 名 · ${result.mine.total} 分`
-                      : `${result.winner?.name} ${result.winnerResult?.label ?? ""}`}
-                  </strong>
-                  <b>
-                    {result.mine ? `勝者 ${result.winner?.total} 分` : result.winner?.total} ·{" "}
-                    {formatHistoryDate(game.finishedAt)}
-                    {result.concessions && ` · ${result.concessions}`}
-                  </b>
+                  <ResultIcon outcome={result.outcome as "win" | "loss" | "tie" | "solo"} concession={concession} label={result.label} />
+                  <div>
+                    <strong>
+                      {subject.total} 分
+                      {result.outcome === "loss" && read.winner && <small>勝者 {read.winner.total}</small>}
+                    </strong>
+                    <span>{rivals ? `${read.mine ? "" : `${subject.name} `}對 ${rivals}` : result.label}</span>
+                  </div>
+                  <time>{formatHistoryDate(game.finishedAt)}</time>
                 </article>
               );
             })}
