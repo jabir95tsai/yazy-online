@@ -2795,6 +2795,7 @@ export default function Home() {
                   <div>
                     <strong>
                       {subject.total} 分
+                      {hasYazy(subject) && <i className="record-yazy">YAZY</i>}
                       {result.outcome === "loss" && read.winner && <small>勝者 {read.winner.total}</small>}
                     </strong>
                     <span>{rivals ? `${read.mine ? "" : `${subject.name} `}對 ${rivals}` : result.label}</span>
