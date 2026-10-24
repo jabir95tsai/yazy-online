@@ -62,7 +62,7 @@ import {
   serializeHash,
 } from "../lib/password-hash.ts";
 import { historyStats, versusRecords, placeFor } from "../lib/stats.ts";
-import { RequestScope } from "../lib/request-scope.ts";
+import { RequestScope, withTimeout } from "../lib/request-scope.ts";
 import { idsIn } from "../lib/query.ts";
 import { sql } from "drizzle-orm";
 import { SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
@@ -445,4 +445,15 @@ test("concession overrides higher points in overall and head-to-head results", (
   assert.equal(historyStats(games).losses, 1);
   assert.equal(historyStats(games).bestScore, 50);
   assert.equal(versusRecords(games).get("them")?.losses, 1);
+});
+
+test("withTimeout aborts on its own timer or with its parent", async () => {
+  const parent = new AbortController();
+  const timed = withTimeout(parent.signal, 5);
+  assert.equal(timed.aborted, false);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(timed.aborted, true);
+  const linked = withTimeout(parent.signal, 1_000);
+  parent.abort();
+  assert.equal(linked.aborted, true);
 });

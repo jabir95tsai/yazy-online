@@ -57,7 +57,7 @@ import { BonusRow, ScoreRow, YazyBonusRow } from "./components/score-row";
 import { StatGrid } from "./components/stat-grid";
 import { SegmentedTabs } from "./components/tabs";
 import { TurnCountdown } from "./components/turn-countdown";
-import { RequestScope } from "@/lib/request-scope";
+import { RequestScope, withTimeout } from "@/lib/request-scope";
 import { formatHistoryDate } from "@/lib/history-date";
 import { historyResult } from "@/lib/history-result";
 
@@ -763,7 +763,7 @@ export default function Home() {
       const response = await fetch(`/api/rooms/${code}`, {
         cache: "no-store",
         headers,
-        signal,
+        signal: withTimeout(signal),
       });
       if (!roomScope.current.accepts(signal)) return;
       if (response.status === 304) return;
@@ -924,12 +924,16 @@ export default function Home() {
       if (document.visibilityState === "visible") void poll();
       else schedule();
     };
+    // Catch up the moment the connection returns instead of waiting a tick.
+    const onOnline = () => void poll();
     schedule();
     document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("online", onOnline);
     return () => {
       stopped = true;
       if (timer !== null) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("online", onOnline);
     };
   }, [fetchRoom, session, state?.room.status, state?.room.practice]);
 
@@ -1191,6 +1195,7 @@ export default function Home() {
       const url = kind === "create" ? "/api/rooms" : `/api/rooms/${code}/join`;
       const response = await fetch(url, {
         method: "POST",
+        signal: withTimeout(),
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name }),
       });
@@ -1456,6 +1461,7 @@ export default function Home() {
         if (!roomScope.current.accepts(signal) || !latestState || latestState.room.code !== session.code) return;
         response = await fetch(`/api/rooms/${session.code}/action`, {
           method: "POST",
+          signal: withTimeout(signal),
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             action: actionName,
@@ -1506,6 +1512,8 @@ export default function Home() {
       if (roomScope.current.accepts(signal)) {
         if (actionName === "roll") resetRollAnimation();
         setError("連線失敗，請再試一次。");
+        // A timed-out request may still have landed, so re-read before the next tap.
+        void fetchRoom(session.code, true);
       }
     } finally {
       actionBusyRef.current = false;
@@ -1580,7 +1588,7 @@ export default function Home() {
           }
           const response = await fetch(`/api/rooms/${session.code}/action`, {
             method: "POST",
-            signal,
+            signal: withTimeout(signal),
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
               action: "hold",
