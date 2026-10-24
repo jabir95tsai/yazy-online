@@ -33,6 +33,10 @@
   ],
   // Per-IP budget for POST /api/rooms, enforced in `lib/server.ts`.
   // `period` accepts only 10 or 60.
+  "durable_objects": {
+    "bindings": [{ "name": "ROOM_NOTIFIER", "class_name": "RoomNotifier" }]
+  },
+  "migrations": [{ "tag": "room-notifier-v1", "new_sqlite_classes": ["RoomNotifier"] }],
   "ratelimits": [
     {
       "name": "ROOM_CREATE_LIMITER",

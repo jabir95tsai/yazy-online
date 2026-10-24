@@ -3,7 +3,7 @@ import { ensureSchema, getD1, getDb } from "@/db";
 import { players, rooms, scores } from "@/db/schema";
 import { addTurnScore, categoryIds, fairDieFromByte, scoreTurn, YAZY_BONUS, type CategoryId } from "@/lib/game";
 import { resolveMatch, type MatchPlayer, type MatchScore } from "@/lib/match";
-import { apiError, cleanCode, getRoomState, hashToken } from "@/lib/server";
+import { apiError, cleanCode, getRoomState, hashToken, notifyRoom } from "@/lib/server";
 import { loadFinishedGames } from "@/lib/history";
 
 type ActionBody = {
@@ -30,6 +30,7 @@ function normalizeHeld(value: unknown) {
  * read just leaves the client to fetch the room itself.
  */
 async function withState(code: string, extra: object = {}) {
+  notifyRoom(code);
   const { state, etag } = await getRoomState(code).catch(() => ({ state: null, etag: null }));
   return Response.json({ ok: true, ...extra, state }, etag ? { headers: { etag } } : undefined);
 }
@@ -310,6 +311,7 @@ export async function POST(
       if (!resultChanged(result)) {
         return Response.json({ error: "回合狀態已變更，請重新整理。" }, { status: 409 });
       }
+      notifyRoom(code);
       return Response.json({ ok: true, held, updatedAt });
     }
 

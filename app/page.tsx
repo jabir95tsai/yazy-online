@@ -352,6 +352,8 @@ export default function Home() {
   const holdSyncTimer = useRef<number | null>(null);
   const holdRequestRef = useRef<Promise<boolean> | null>(null);
   const roomScope = useRef(new RequestScope());
+  // True while the table's push socket is open; the poll then only backs it up.
+  const liveRef = useRef(false);
   const accountScope = useRef(new RequestScope());
   /** Hold selection waiting out the debounce window, not yet sent. */
   const pendingHoldRef = useRef<boolean[] | null>(null);
@@ -922,7 +924,7 @@ export default function Home() {
     const schedule = () => {
       if (timer !== null) window.clearTimeout(timer);
       const interval =
-        document.visibilityState === "hidden" ? 15_000 : status !== "playing" ? 4_000 : 1_500;
+        document.visibilityState === "hidden" ? 15_000 : liveRef.current ? 10_000 : status !== "playing" ? 4_000 : 1_500;
       timer = window.setTimeout(() => void poll(), interval);
     };
     const onVisibilityChange = () => {
@@ -941,6 +943,46 @@ export default function Home() {
       window.removeEventListener("online", onOnline);
     };
   }, [fetchRoom, session, state?.room.status, state?.room.practice]);
+
+  /** Re-read the room the moment the server says it changed. */
+  useEffect(() => {
+    if (!session || state?.room.practice) return;
+    let socket: WebSocket | null = null;
+    let retry: number | null = null;
+    let ping: number | null = null;
+    let failures = 0;
+    let stopped = false;
+    const connect = () => {
+      const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+      socket = new WebSocket(`${scheme}://${window.location.host}/api/rooms/${session.code}/live`);
+      socket.onopen = () => {
+        failures = 0;
+        liveRef.current = true;
+        // Anything that changed while disconnected was never announced.
+        void fetchRoom(session.code, true);
+        // Cloudflare drops sockets idle for ~100 s.
+        ping = window.setInterval(() => socket?.send("ping"), 30_000);
+      };
+      socket.onmessage = (event) => {
+        if (event.data === "changed") void fetchRoom(session.code, true);
+      };
+      socket.onclose = () => {
+        liveRef.current = false;
+        if (ping !== null) window.clearInterval(ping);
+        if (stopped) return;
+        failures += 1;
+        retry = window.setTimeout(connect, Math.min(1_000 * 2 ** failures, 30_000));
+      };
+    };
+    connect();
+    return () => {
+      stopped = true;
+      liveRef.current = false;
+      if (retry !== null) window.clearTimeout(retry);
+      if (ping !== null) window.clearInterval(ping);
+      socket?.close();
+    };
+  }, [fetchRoom, session, state?.room.practice]);
 
   useEffect(
     () => () => {

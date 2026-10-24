@@ -1,5 +1,6 @@
 import { asc, eq } from "drizzle-orm";
-import { env } from "cloudflare:workers";
+import { env, waitUntil } from "cloudflare:workers";
+import type { DurableObjectNamespace } from "@cloudflare/workers-types";
 import { ensureSchema, getDb } from "@/db";
 import { players, rooms, scores } from "@/db/schema";
 
@@ -15,6 +16,21 @@ const limiterEnv = env as {
   ROOM_CREATE_LIMITER?: RateLimiter;
   AUTH_LIMITER?: RateLimiter;
 };
+
+const notifierEnv = env as { ROOM_NOTIFIER?: DurableObjectNamespace };
+
+/**
+ * Tell the table's open sockets to re-read the room. Best effort and off the
+ * response path: a missed ping only means waiting for the fallback poll.
+ */
+export function notifyRoom(code: string) {
+  const namespace = notifierEnv.ROOM_NOTIFIER;
+  if (!namespace) return;
+  waitUntil(
+    namespace.get(namespace.idFromName(code)).fetch("https://room/notify", { method: "POST" })
+      .catch((error: unknown) => console.warn("room notify failed", error)),
+  );
+}
 
 export function clientIp(request: Request) {
   return request.headers.get("cf-connecting-ip") ?? "unknown";

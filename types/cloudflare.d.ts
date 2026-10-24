@@ -12,4 +12,6 @@
 declare module "cloudflare:workers" {
   // Consumers narrow this with a cast to the bindings they expect.
   export const env: unknown;
+  // Keeps the invocation alive for work that should not delay the response.
+  export function waitUntil(promise: Promise<unknown>): void;
 }

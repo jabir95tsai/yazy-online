@@ -8,6 +8,7 @@ import {
   cleanName,
   hashToken,
   makePlayerToken,
+  notifyRoom,
 } from "@/lib/server";
 
 export async function POST(
@@ -106,6 +107,7 @@ export async function POST(
         .run();
     }
 
+    notifyRoom(code);
     return Response.json(
       { code, playerId, token, spectator: room.status !== "waiting" },
       { status: 201 },
