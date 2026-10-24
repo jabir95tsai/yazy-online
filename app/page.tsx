@@ -194,7 +194,9 @@ function readGame(game: HistoryGame) {
 }
 /** How far apart the dice come down, so they land as a run rather than a slab. */
 const DIE_SETTLE_STAGGER = 80;
-const ROLL_SAFETY_TIMEOUT = 5_000;
+// Long enough to ride out a slow server: a die held in the air waiting for its
+// answer reads better than one that lands on its old face and then changes.
+const ROLL_SAFETY_TIMEOUT = 15_000;
 function readSessions(): Session[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(SESSION_KEY) ?? "[]");
@@ -583,7 +585,14 @@ export default function Home() {
    * snapping onto the table.
    */
   const revealRollResult = useCallback(
-    (heldDice: boolean[], dice: number[]) => {
+    (rolledHeld: boolean[], dice: number[]) => {
+      // A YAZY locks all five dice, so the room we are handed says nothing
+      // moved. The dice still in flight are the ones that were thrown.
+      const inFlight = dieThrowsRef.current.map(Boolean);
+      const heldDice =
+        rolledHeld.every(Boolean) && inFlight.some(Boolean)
+          ? inFlight.map((isMoving) => !isMoving)
+          : rolledHeld;
       const movingDice = heldDice
         .map((isHeld, index) => (isHeld ? -1 : index))
         .filter((index) => index >= 0);
@@ -798,6 +807,8 @@ export default function Home() {
         Boolean(previous) &&
         !turnChanged &&
         next.room.rollsUsed > (previous?.room.rollsUsed ?? 0);
+      // Read before the lines below overwrite it with the post-roll holds.
+      const thrownHeld = heldRef.current;
       if (!previous || turnChanged || previous.room.rollsUsed !== next.room.rollsUsed) {
         // The roll or turn this selection belonged to is over, so anything
         // still queued would be sent against a stale room.
@@ -808,7 +819,10 @@ export default function Home() {
         heldRef.current = next.room.held;
         setHeld(next.room.held);
       }
-      if (newRoll) revealRollResult(next.room.held, next.room.dice);
+      // A YAZY locks all five dice, so the pre-roll holds say which were thrown.
+      if (newRoll) {
+        revealRollResult(next.room.held.every(Boolean) ? thrownHeld : next.room.held, next.room.dice);
+      }
       stateRef.current = next;
       setState(next);
     } catch {
