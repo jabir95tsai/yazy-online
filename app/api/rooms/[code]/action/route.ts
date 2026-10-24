@@ -3,7 +3,7 @@ import { ensureSchema, getD1, getDb } from "@/db";
 import { players, rooms, scores } from "@/db/schema";
 import { addTurnScore, categoryIds, fairDieFromByte, scoreTurn, YAZY_BONUS, type CategoryId } from "@/lib/game";
 import { resolveMatch, type MatchPlayer, type MatchScore } from "@/lib/match";
-import { apiError, cleanCode, hashToken } from "@/lib/server";
+import { apiError, cleanCode, getRoomState, hashToken } from "@/lib/server";
 import { loadFinishedGames } from "@/lib/history";
 
 type ActionBody = {
@@ -22,6 +22,16 @@ const emptyHeld = [false, false, false, false, false];
 
 function normalizeHeld(value: unknown) {
   return Array.isArray(value) && value.length === 5 ? value.map(Boolean) : null;
+}
+
+/**
+ * Success reply carrying the fresh room, saving the client a second round
+ * trip to see what its action did. The write already landed, so a failed
+ * read just leaves the client to fetch the room itself.
+ */
+async function withState(code: string, extra: object = {}) {
+  const { state, etag } = await getRoomState(code).catch(() => ({ state: null, etag: null }));
+  return Response.json({ ok: true, ...extra, state }, etag ? { headers: { etag } } : undefined);
 }
 
 function resultChanged(result: { meta: { changes?: number } }) {
@@ -171,7 +181,7 @@ export async function POST(
           AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
           .bind(player.id, room.id, room.id, updatedAt),
       ]);
-      return resultChanged(result) ? Response.json({ ok: true })
+      return resultChanged(result) ? withState(code)
         : Response.json({ error: "房間狀態已變更，請重新整理。" }, { status: 409 });
     }
 
@@ -188,7 +198,7 @@ export async function POST(
           AND EXISTS (SELECT 1 FROM rooms WHERE id = ? AND updated_at = ?)`)
           .bind(body.action === "accept-rematch" ? 1 : -1, body.action === "accept-rematch" ? null : "manual", player.id, room.id, room.id, updatedAt),
       ]);
-      return resultChanged(result) ? Response.json({ ok: true }) : Response.json({ error: "房間狀態已變更，請重試。" }, { status: 409 });
+      return resultChanged(result) ? withState(code) : Response.json({ error: "房間狀態已變更，請重試。" }, { status: 409 });
     }
 
     if (body.action === "start") {
@@ -223,7 +233,7 @@ export async function POST(
       if (!resultChanged(result)) {
         return Response.json({ error: "遊戲已經開始，請重新整理。" }, { status: 409 });
       }
-      return Response.json({ ok: true });
+      return withState(code);
     }
 
     if (room.status !== "playing") {
@@ -249,7 +259,7 @@ export async function POST(
         surrender: body.action === "surrender" ? player.id : undefined,
         finish: body.action === "finish",
       });
-      return next ? Response.json({ ok: true, ...next })
+      return next ? withState(code, next)
         : Response.json({ error: "房間狀態已變更，請重試。" }, { status: 409 });
     }
 
@@ -265,7 +275,7 @@ export async function POST(
         score: free && !stalled.surrenderReason ? { playerId: stalled.id, category: free, score: 0 } : undefined,
         advance: true,
       });
-      return next ? Response.json({ ok: true, skippedPlayer: stalled.name, ...next })
+      return next ? withState(code, { skippedPlayer: stalled.name, ...next })
         : Response.json({ error: "回合已經變更，請重新整理。" }, { status: 409 });
     }
 
@@ -344,7 +354,7 @@ export async function POST(
       if (!resultChanged(result)) {
         return Response.json({ error: "回合狀態已變更，請重新整理。" }, { status: 409 });
       }
-      return Response.json({ ok: true, dice: nextDice });
+      return withState(code, { dice: nextDice });
     }
 
     if (body.action === "score") {
@@ -365,7 +375,7 @@ export async function POST(
           { status: 409 },
         );
       }
-      return Response.json({ ok: true, score: value, bonus, complete: next.complete });
+      return withState(code, { score: value, bonus, complete: next.complete });
     }
 
     return Response.json({ error: "不支援的操作。" }, { status: 400 });

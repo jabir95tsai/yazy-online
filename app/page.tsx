@@ -753,6 +753,59 @@ export default function Home() {
     }
   }, [refreshProfile]);
 
+  /** Commit a room snapshot, from a poll or from an action's own reply. */
+  const applyRoomState = useCallback((next: RoomState, etag: string | null) => {
+    const previous = stateRef.current;
+    if (
+      previous?.room.code === next.room.code &&
+      next.room.updatedAt < previous.room.updatedAt
+    ) {
+      return;
+    }
+    roomEtagRef.current = etag;
+    const turnChanged =
+      previous?.room.code !== next.room.code ||
+      previous?.room.status !== next.room.status ||
+      previous?.room.currentSeat !== next.room.currentSeat ||
+      previous?.room.round !== next.room.round;
+    if (
+      turnChanged &&
+      session &&
+      next.room.status === "playing" &&
+      next.players.some(
+        (player) => player.id === session.playerId && player.seat === next.room.currentSeat,
+      )
+    ) {
+      setScorePlayerId(session.playerId);
+    }
+    if (previous?.room.status === "finished" && next.room.status === "playing") {
+      setShowFinalCards(false);
+      setConfirmSurrender(false);
+    }
+    const newRoll =
+      Boolean(previous) &&
+      !turnChanged &&
+      next.room.rollsUsed > (previous?.room.rollsUsed ?? 0);
+    // Read before the lines below overwrite it with the post-roll holds.
+    const thrownHeld = heldRef.current;
+    if (!previous || turnChanged || previous.room.rollsUsed !== next.room.rollsUsed) {
+      // The roll or turn this selection belonged to is over, so anything
+      // still queued would be sent against a stale room.
+      pendingHoldRef.current = null;
+      heldRef.current = next.room.held;
+      setHeld(next.room.held);
+    } else if (!pendingHoldRef.current && !holdRequestRef.current) {
+      heldRef.current = next.room.held;
+      setHeld(next.room.held);
+    }
+    // A YAZY locks all five dice, so the pre-roll holds say which were thrown.
+    if (newRoll) {
+      revealRollResult(next.room.held.every(Boolean) ? thrownHeld : next.room.held, next.room.dice);
+    }
+    stateRef.current = next;
+    setState(next);
+  }, [revealRollResult, session]);
+
   const fetchRoom = useCallback(async (code: string, quiet = false) => {
     const signal = roomScope.current.signal;
     try {
@@ -776,59 +829,11 @@ export default function Home() {
       }
       const next = (await response.json()) as RoomState;
       if (!roomScope.current.accepts(signal)) return;
-      const previous = stateRef.current;
-      if (
-        previous?.room.code === next.room.code &&
-        next.room.updatedAt < previous.room.updatedAt
-      ) {
-        return;
-      }
-      roomEtagRef.current = response.headers.get("etag");
-      const turnChanged =
-        previous?.room.code !== next.room.code ||
-        previous?.room.status !== next.room.status ||
-        previous?.room.currentSeat !== next.room.currentSeat ||
-        previous?.room.round !== next.room.round;
-      if (
-        turnChanged &&
-        session &&
-        next.room.status === "playing" &&
-        next.players.some(
-          (player) => player.id === session.playerId && player.seat === next.room.currentSeat,
-        )
-      ) {
-        setScorePlayerId(session.playerId);
-      }
-      if (previous?.room.status === "finished" && next.room.status === "playing") {
-        setShowFinalCards(false);
-        setConfirmSurrender(false);
-      }
-      const newRoll =
-        Boolean(previous) &&
-        !turnChanged &&
-        next.room.rollsUsed > (previous?.room.rollsUsed ?? 0);
-      // Read before the lines below overwrite it with the post-roll holds.
-      const thrownHeld = heldRef.current;
-      if (!previous || turnChanged || previous.room.rollsUsed !== next.room.rollsUsed) {
-        // The roll or turn this selection belonged to is over, so anything
-        // still queued would be sent against a stale room.
-        pendingHoldRef.current = null;
-        heldRef.current = next.room.held;
-        setHeld(next.room.held);
-      } else if (!pendingHoldRef.current && !holdRequestRef.current) {
-        heldRef.current = next.room.held;
-        setHeld(next.room.held);
-      }
-      // A YAZY locks all five dice, so the pre-roll holds say which were thrown.
-      if (newRoll) {
-        revealRollResult(next.room.held.every(Boolean) ? thrownHeld : next.room.held, next.room.dice);
-      }
-      stateRef.current = next;
-      setState(next);
+      applyRoomState(next, response.headers.get("etag"));
     } catch {
       if (!quiet && roomScope.current.accepts(signal)) setError("連線中斷，正在嘗試重新連線。");
     }
-  }, [revealRollResult, session]);
+  }, [applyRoomState]);
 
   // The frame loop keeps rescheduling itself, so leaving a game mid-roll would
   // otherwise leave one running against nodes that are no longer on the page.
@@ -1455,7 +1460,7 @@ export default function Home() {
       if (!roomScope.current.accepts(signal)) return;
 
       let response: Response | null = null;
-      let data: { error?: string } = {};
+      let data: { error?: string; state?: RoomState | null } = {};
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const latestState = stateRef.current;
         if (!roomScope.current.accepts(signal) || !latestState || latestState.room.code !== session.code) return;
@@ -1472,7 +1477,7 @@ export default function Home() {
             expectedUpdatedAt: latestState.room.updatedAt,
           }),
         });
-        data = (await response.json()) as { error?: string };
+        data = (await response.json()) as typeof data;
         if (!roomScope.current.accepts(signal)) return;
         const recoverableConflict =
           response.status === 409 && data.error?.includes("狀態已變更");
@@ -1490,7 +1495,8 @@ export default function Home() {
         heldRef.current = empty;
         setHeld(empty);
       }
-      await fetchRoom(session.code);
+      if (data.state) applyRoomState(data.state, response.headers.get("etag"));
+      else await fetchRoom(session.code);
       if (!roomScope.current.accepts(signal)) return;
       // The reveal normally rides on `fetchRoom` noticing `rollsUsed` climb.
       // That inference can be missed — most easily when a poll lands the new
